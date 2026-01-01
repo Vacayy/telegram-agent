@@ -15,6 +15,7 @@ from src.database import (
     get_messages,
     clear_messages,
     get_message_count,
+    delete_message_by_index,
 )
 from src.agent import get_ai_response, search_web_only, search_x_only
 from src.tools.xai_tools import SearchError
@@ -28,7 +29,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📝 **사용 방법**
 1. 다른 채널/그룹의 메시지를 이 채팅방으로 포워딩하세요
-2. 또는 직접 메시지를 작성하여 저장하세요
+2. 또는 /save 명령어로 메시지를 저장하세요
 3. 저장된 내용에 대해 질문하면 답변해 드립니다
 
 💡 **예시**
@@ -38,8 +39,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📋 **명령어**
 /help - 도움말
-/list - 저장된 메시지 목록
-/clear - 저장된 메시지 삭제
+/save <메시지> - 메시지 저장
+/list - 저장된 메시지 목록 (최근 10개)
+/listall - 저장된 메시지 전체 목록
+/delete <번호> - 메시지 삭제
+/clear - 저장된 메시지 전체 삭제
 /search <검색어> - 웹 검색
 /x <검색어> - X(트위터) 검색
 """
@@ -52,7 +56,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 /start - 봇 시작 및 사용법
 /help - 이 도움말 보기
+/save <메시지> - 메시지 저장
 /list - 저장된 메시지 목록 (최근 10개)
+/listall - 저장된 메시지 전체 목록
+/delete <번호> - 메시지 삭제 (list 번호 기준)
 /clear - 저장된 메시지 전체 삭제
 /search <검색어> - 웹 검색
 /x <검색어> - X(트위터) 검색
@@ -65,8 +72,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_message, parse_mode="Markdown")
 
 
+async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/save - 메시지 저장"""
+    if not context.args:
+        await update.message.reply_text("❓ 저장할 메시지를 입력해주세요.\n예: /save 오늘 미팅 내용 정리")
+        return
+
+    user_id = update.effective_user.id
+    content = " ".join(context.args)
+
+    await save_message(user_id=user_id, content=content, is_forwarded=False)
+    await update.message.reply_text("✅ 메시지가 저장되었습니다.")
+
+
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/list - 저장된 메시지 목록"""
+    """/list - 저장된 메시지 목록 (최근 10개)"""
     user_id = update.effective_user.id
     messages = await get_messages(user_id, limit=10)
 
@@ -75,15 +95,61 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     count = await get_message_count(user_id)
-    response = f"📋 **저장된 메시지** ({count}개 중 최근 10개)\n\n"
+    response = f"📋 저장된 메시지 ({count}개 중 최근 10개)\n\n"
 
     for i, msg in enumerate(messages, 1):
         content_preview = msg["content"][:100] + "..." if len(msg["content"]) > 100 else msg["content"]
-        source = "📨 포워딩" if msg["is_forwarded"] else "✍️ 직접 작성"
+        source = "[포워딩]" if msg["is_forwarded"] else "[직접]"
         time_str = msg["created_at"][:16] if msg["created_at"] else ""
         response += f"{i}. {source} ({time_str})\n{content_preview}\n\n"
 
-    await update.message.reply_text(response, parse_mode="Markdown")
+    await update.message.reply_text(response)
+
+
+async def listall_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/listall - 저장된 메시지 전체 목록"""
+    user_id = update.effective_user.id
+    messages = await get_messages(user_id, limit=1000)
+
+    if not messages:
+        await update.message.reply_text("📭 저장된 메시지가 없습니다.")
+        return
+
+    response = f"📋 저장된 메시지 전체 ({len(messages)}개)\n\n"
+
+    for i, msg in enumerate(messages, 1):
+        content_preview = msg["content"][:80] + "..." if len(msg["content"]) > 80 else msg["content"]
+        source = "[포워딩]" if msg["is_forwarded"] else "[직접]"
+        time_str = msg["created_at"][:16] if msg["created_at"] else ""
+        response += f"{i}. {source} ({time_str})\n{content_preview}\n\n"
+
+        # 텔레그램 메시지 길이 제한 (4096자) 대응
+        if len(response) > 3800:
+            response += f"... 외 {len(messages) - i}개 더 있음"
+            break
+
+    await update.message.reply_text(response)
+
+
+async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/delete - 메시지 삭제"""
+    if not context.args:
+        await update.message.reply_text("❓ 삭제할 메시지 번호를 입력해주세요.\n예: /delete 1\n\n/list 또는 /listall 에서 번호 확인")
+        return
+
+    try:
+        index = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ 올바른 숫자를 입력해주세요.\n예: /delete 1")
+        return
+
+    user_id = update.effective_user.id
+    success = await delete_message_by_index(user_id, index)
+
+    if success:
+        await update.message.reply_text(f"🗑️ {index}번 메시지가 삭제되었습니다.")
+    else:
+        await update.message.reply_text(f"❌ {index}번 메시지를 찾을 수 없습니다.")
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -161,16 +227,97 @@ async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT
     await update.message.reply_text(f"✅ 메시지가 저장되었습니다{source_text}")
 
 
+def detect_command_intent(message: str) -> tuple[str | None, str | None]:
+    """자연어에서 명령어 의도 감지
+
+    Returns:
+        (command, argument) 튜플. 감지되지 않으면 (None, None)
+    """
+    msg_lower = message.lower()
+
+    # 저장된 메시지 조회 요청
+    list_keywords = ["저장된 메시지", "저장한 메시지", "메시지 목록", "메시지 리스트",
+                     "뭐 저장", "저장된 거", "저장한 거", "리스트 보여", "목록 보여"]
+    if any(kw in msg_lower for kw in list_keywords):
+        if "전체" in msg_lower or "모두" in msg_lower or "다" in msg_lower:
+            return ("listall", None)
+        return ("list", None)
+
+    # 전체 삭제 요청
+    clear_keywords = ["전부 삭제", "전체 삭제", "모두 삭제", "다 삭제", "다 지워", "전부 지워", "초기화"]
+    if any(kw in msg_lower for kw in clear_keywords):
+        return ("clear", None)
+
+    # 도움말 요청
+    help_keywords = ["도움말", "사용법", "어떻게 사용", "명령어 알려", "뭘 할 수 있"]
+    if any(kw in msg_lower for kw in help_keywords):
+        return ("help", None)
+
+    return (None, None)
+
+
 async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """일반 메시지 처리 - AI 응답 생성"""
+    """일반 메시지 처리 - 명령어 감지 또는 AI 응답 생성"""
     user_id = update.effective_user.id
     user_message = update.message.text
 
-    # "저장해줘", "기억해줘" 등의 키워드가 있으면 메시지 저장
-    save_keywords = ["저장", "기억", "메모", "save", "remember"]
-    if any(keyword in user_message.lower() for keyword in save_keywords):
-        await save_message(user_id=user_id, content=user_message, is_forwarded=False)
-        await update.message.reply_text("✅ 메시지가 저장되었습니다.")
+    # 자연어 명령어 감지
+    command, arg = detect_command_intent(user_message)
+
+    if command == "list":
+        messages = await get_messages(user_id, limit=10)
+        if not messages:
+            await update.message.reply_text("📭 저장된 메시지가 없습니다.")
+            return
+        count = await get_message_count(user_id)
+        response = f"📋 저장된 메시지 ({count}개 중 최근 10개)\n\n"
+        for i, msg in enumerate(messages, 1):
+            content_preview = msg["content"][:100] + "..." if len(msg["content"]) > 100 else msg["content"]
+            source = "[포워딩]" if msg["is_forwarded"] else "[직접]"
+            time_str = msg["created_at"][:16] if msg["created_at"] else ""
+            response += f"{i}. {source} ({time_str})\n{content_preview}\n\n"
+        await update.message.reply_text(response)
+        return
+
+    if command == "listall":
+        messages = await get_messages(user_id, limit=1000)
+        if not messages:
+            await update.message.reply_text("📭 저장된 메시지가 없습니다.")
+            return
+        response = f"📋 저장된 메시지 전체 ({len(messages)}개)\n\n"
+        for i, msg in enumerate(messages, 1):
+            content_preview = msg["content"][:80] + "..." if len(msg["content"]) > 80 else msg["content"]
+            source = "[포워딩]" if msg["is_forwarded"] else "[직접]"
+            time_str = msg["created_at"][:16] if msg["created_at"] else ""
+            response += f"{i}. {source} ({time_str})\n{content_preview}\n\n"
+            if len(response) > 3800:
+                response += f"... 외 {len(messages) - i}개 더 있음"
+                break
+        await update.message.reply_text(response)
+        return
+
+    if command == "clear":
+        deleted_count = await clear_messages(user_id)
+        if deleted_count > 0:
+            await update.message.reply_text(f"🗑️ {deleted_count}개의 메시지가 삭제되었습니다.")
+        else:
+            await update.message.reply_text("📭 삭제할 메시지가 없습니다.")
+        return
+
+    if command == "help":
+        help_message = """📋 명령어 목록
+
+/save <메시지> - 메시지 저장
+/list - 저장된 메시지 목록 (최근 10개)
+/listall - 저장된 메시지 전체 목록
+/delete <번호> - 메시지 삭제 (list 번호 기준)
+/clear - 저장된 메시지 전체 삭제
+/search <검색어> - 웹 검색
+/x <검색어> - X(트위터) 검색
+
+포워딩된 메시지는 자동 저장됩니다.
+일반 질문은 AI가 답변합니다."""
+        await update.message.reply_text(help_message)
         return
 
     # AI 응답 생성
@@ -196,7 +343,10 @@ def create_bot_application() -> Application:
     # 명령어 핸들러 등록
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("save", save_command))
     application.add_handler(CommandHandler("list", list_command))
+    application.add_handler(CommandHandler("listall", listall_command))
+    application.add_handler(CommandHandler("delete", delete_command))
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("search", search_command))
     application.add_handler(CommandHandler("x", x_search_command))

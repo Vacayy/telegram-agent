@@ -98,3 +98,22 @@ async def get_message_count(user_id: int) -> int:
         )
         result = await cursor.fetchone()
         return result[0] if result else 0
+
+
+async def delete_message_by_index(user_id: int, index: int) -> bool:
+    """인덱스(1부터 시작)로 메시지 삭제 (최신순 기준)"""
+    messages = await get_messages(user_id, limit=1000)
+
+    if not messages or index < 1 or index > len(messages):
+        return False
+
+    # 인덱스는 1부터 시작, 리스트는 0부터
+    message_id = messages[index - 1]["id"]
+
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cursor = await db.execute(
+            "DELETE FROM messages WHERE id = ? AND user_id = ?",
+            (message_id, user_id)
+        )
+        await db.commit()
+        return cursor.rowcount > 0

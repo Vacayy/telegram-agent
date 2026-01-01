@@ -1,0 +1,16 @@
+# Telegram Bot
+python-telegram-bot>=20.0
+
+# LangChain & AI
+langchain>=0.1.0
+langchain-openai>=0.0.5
+langchain-community>=0.0.10
+
+# xAI API (OpenAI compatible)
+openai>=1.0.0
+
+# Database
+aiosqlite>=0.19.0
+
+# Environment
+python-dotenv>=1.0.0

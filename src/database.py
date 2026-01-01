@@ -63,17 +63,32 @@ async def get_messages(user_id: int, limit: int = 50) -> list[dict]:
 
 
 async def get_all_messages_as_context(user_id: int, limit: int = 20) -> str:
-    """LLM 컨텍스트용 메시지 포맷팅"""
+    """LLM 컨텍스트용 메시지 포맷팅
+
+    가장 최근 메시지를 명확히 표시하여 "이거", "방금 거" 등의 지시어가
+    올바르게 해석될 수 있도록 합니다.
+    """
     messages = await get_messages(user_id, limit)
 
     if not messages:
         return "저장된 메시지가 없습니다."
 
     context_parts = []
-    for msg in reversed(messages):  # 시간순으로 정렬
+    # messages는 최신순(DESC)이므로, reversed하면 오래된 것부터 시간순
+    messages_chronological = list(reversed(messages))
+    total_count = len(messages_chronological)
+
+    for idx, msg in enumerate(messages_chronological):
         source = f"[포워딩: {msg['forward_from']}]" if msg['is_forwarded'] else "[직접 작성]"
         time_str = msg['created_at'][:16] if msg['created_at'] else ""
-        context_parts.append(f"{source} ({time_str})\n{msg['content']}")
+
+        # 가장 최근 메시지(마지막)에 특별 표시
+        if idx == total_count - 1:
+            context_parts.append(
+                f"[가장 최근 저장된 메시지] {source} ({time_str})\n{msg['content']}"
+            )
+        else:
+            context_parts.append(f"{source} ({time_str})\n{msg['content']}")
 
     return "\n\n---\n\n".join(context_parts)
 

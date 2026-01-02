@@ -132,26 +132,73 @@ class ToolStatusCallback(AsyncCallbackHandler):
     """도구 사용 시 상태를 알려주는 비동기 콜백 핸들러"""
 
     def __init__(self, status_callback: Optional[Callable[[str], Coroutine[Any, Any, None]]] = None):
+        super().__init__()
         self.status_callback = status_callback
-        self.tool_calls = []  # 호출된 도구 목록
+        self.status_lines = []  # 상태 메시지 스택
+
+    def _extract_query(self, input_str: str) -> str:
+        """input_str에서 검색어 추출"""
+        import json
+        import ast
+
+        query = input_str
+        try:
+            # Case 1: JSON 문자열 ({"query": "..."})
+            parsed = json.loads(input_str)
+            if isinstance(parsed, dict) and "query" in parsed:
+                return parsed["query"]
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        # Case 2: Python dict repr 형태 ({'query': '...'})
+        try:
+            parsed = ast.literal_eval(input_str)
+            if isinstance(parsed, dict) and "query" in parsed:
+                return parsed["query"]
+        except (ValueError, SyntaxError):
+            pass
+
+        return query
+
+    def _build_status_message(self) -> str:
+        """스택에 쌓인 상태들을 하나의 메시지로 조합"""
+        return "\n".join(self.status_lines)
 
     async def on_tool_start(
         self,
         serialized: dict,
         input_str: str,
+        *,
+        run_id,
+        parent_run_id=None,
+        tags=None,
+        metadata=None,
+        inputs=None,
         **kwargs
     ) -> None:
         """도구 실행 시작 시 호출"""
         tool_name = serialized.get("name", "unknown")
-        self.tool_calls.append(tool_name)
+        query = self._extract_query(input_str)
 
+        print(f"[ToolCallback] 도구 시작: {tool_name}, 검색어: {query}")
+
+        # 상태 메시지 생성
+        if tool_name == "web_search":
+            status_line = f"🌐 웹 검색 중... ('{query}')"
+        elif tool_name == "x_search":
+            status_line = f"🐦 X 검색 중... ('{query}')"
+        else:
+            status_line = f"🔧 {tool_name} 실행 중..."
+
+        # 스택에 추가
+        self.status_lines.append(status_line)
+
+        # 전체 상태 업데이트
         if self.status_callback:
-            template = TOOL_STATUS_TEMPLATES.get(tool_name)
-            if template:
-                message = template.format(query=input_str)
-            else:
-                message = f"🔧 {tool_name} 실행 중..."
-            await self.status_callback(message)
+            try:
+                await self.status_callback(self._build_status_message())
+            except Exception as e:
+                print(f"[ToolCallback] 상태 업데이트 실패: {e}")
 
 SYSTEM_PROMPT = """당신은 사용자의 개인 AI 비서입니다.
 
@@ -242,12 +289,15 @@ async def get_ai_response(
     """
     try:
         # 저장된 메시지 컨텍스트 가져오기
+        print(f"[get_ai_response] 컨텍스트 로드 중...")
         context = await get_all_messages_as_context(user_id)
+        print(f"[get_ai_response] 컨텍스트 로드 완료: {len(context)}자")
 
         # 콜백 핸들러 생성
         tool_callback = ToolStatusCallback(status_callback)
 
         # Agent 실행 (비동기)
+        print(f"[get_ai_response] Agent 실행 중...")
         agent_executor = create_agent()
         result = await agent_executor.ainvoke(
             {
@@ -257,10 +307,12 @@ async def get_ai_response(
             },
             config={"callbacks": [tool_callback]}
         )
+        print(f"[get_ai_response] Agent 완료")
 
         return result.get("output", "죄송합니다. 응답을 생성하지 못했습니다.")
 
     except Exception as e:
+        print(f"[get_ai_response 오류] {type(e).__name__}: {e}")
         return f"오류가 발생했습니다: {str(e)}"
 
 

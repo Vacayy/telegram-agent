@@ -12,19 +12,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def post_init(application):
+    """봇 초기화 후 실행되는 콜백"""
+    await init_db()
+    print("🤖 봇이 시작되었습니다...")
+
+
 def main():
     """메인 진입점"""
     logger.info("TeleBot 시작 중...")
 
-    # DB 초기화 (동기적으로)
-    asyncio.get_event_loop().run_until_complete(init_db())
-
     # 봇 애플리케이션 생성
     application = create_bot_application()
 
-    print("🤖 봇이 시작되었습니다...")
+    # post_init 콜백 등록
+    application.post_init = post_init
 
-    # 봇 실행 (run_polling이 자체 이벤트 루프 관리)
+    # 봇 실행
     application.run_polling()
 
 

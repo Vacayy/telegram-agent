@@ -50,6 +50,7 @@ Thumbs.db
 *.log
 logs/
 
-# Docs (internal specs)
-docs/
+# Docs (internal specs - keep CHANGELOG public)
+docs/PROJECT_SPEC.md
+docs/IMPLEMENTATION.md
 SETUP_GUIDE.md

@@ -170,14 +170,14 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     query = " ".join(context.args)
-    await update.message.reply_text(f"🔍 웹에서 '{query}' 검색 중...")
+    status_msg = await update.message.reply_text(f"🔍 웹에서 '{query}' 검색 중...")
 
     try:
         result = await search_web_only(query)
         search_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        await update.message.reply_text(f"🌐 **웹 검색 결과** ({search_time})\n\n{result}", parse_mode="Markdown")
+        await status_msg.edit_text(f"🌐 웹 검색 결과 ({search_time})\n\n{result}")
     except SearchError as e:
-        await update.message.reply_text(f"❌ **웹 검색 실패**\n\n{str(e)}")
+        await status_msg.edit_text(f"❌ 웹 검색 실패\n\n{str(e)}")
 
 
 async def x_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -187,14 +187,14 @@ async def x_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     query = " ".join(context.args)
-    await update.message.reply_text(f"🔍 X에서 '{query}' 검색 중...")
+    status_msg = await update.message.reply_text(f"🔍 X에서 '{query}' 검색 중...")
 
     try:
         result = await search_x_only(query)
         search_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        await update.message.reply_text(f"🐦 **X 검색 결과** ({search_time})\n\n{result}", parse_mode="Markdown")
+        await status_msg.edit_text(f"🐦 X 검색 결과 ({search_time})\n\n{result}")
     except SearchError as e:
-        await update.message.reply_text(f"❌ **X 검색 실패**\n\n{str(e)}")
+        await status_msg.edit_text(f"❌ X 검색 실패\n\n{str(e)}")
 
 
 # ==================== 메시지 핸들러 ====================
@@ -313,16 +313,22 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     # QUESTION: AI Agent 호출
-    await update.message.reply_text("🤔 생각 중...")
+    status_msg = await update.message.reply_text("🤔 생각 중...")
 
-    async def send_status(message: str):
-        await update.message.reply_text(message)
+    async def update_status(message: str):
+        try:
+            await status_msg.edit_text(message)
+        except Exception as e:
+            print(f"[상태 업데이트 실패] {e}")
 
     try:
-        response = await get_ai_response(user_id, user_message, send_status)
-        await update.message.reply_text(response)
+        print(f"[AI Agent 호출] 시작: {user_message}")
+        response = await get_ai_response(user_id, user_message, update_status)
+        print(f"[AI Agent 호출] 완료: {len(response)}자")
+        await status_msg.edit_text(response)
     except Exception as e:
-        await update.message.reply_text(f"❌ 응답 생성 실패\n\n{str(e)}")
+        print(f"[AI Agent 오류] {type(e).__name__}: {e}")
+        await status_msg.edit_text(f"❌ 응답 생성 실패\n\n{str(e)}")
 
 
 # ==================== 봇 초기화 ====================

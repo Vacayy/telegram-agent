@@ -1,5 +1,7 @@
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any, Callable, Coroutine, Optional, Literal
+from enum import Enum
 
+from google import genai
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.callbacks import AsyncCallbackHandler
@@ -9,6 +11,114 @@ import config
 from src.tools import get_tools
 from src.tools.xai_tools import search_web, search_x
 from src.database import get_all_messages_as_context
+
+
+class UserIntent(str, Enum):
+    """사용자 의도 분류"""
+    SAVE_MESSAGE = "save_message"        # 메시지 저장
+    LIST_MESSAGES = "list_messages"      # 저장된 메시지 목록 보기
+    LIST_ALL_MESSAGES = "list_all"       # 전체 메시지 보기
+    CLEAR_MESSAGES = "clear_messages"    # 메시지 전체 삭제
+    DELETE_MESSAGE = "delete_message"    # 특정 메시지 삭제
+    HELP = "help"                        # 도움말
+    QUESTION = "question"                # 일반 질문 (AI Agent 필요)
+
+
+INTENT_CLASSIFIER_PROMPT = """당신은 사용자 의도를 분류하는 분류기입니다.
+
+사용자 메시지를 분석하여 다음 중 하나의 의도로 분류하세요:
+
+- save_message: 특정 내용을 저장하고 싶어함 (예: "'안녕' 저장해줘", "이거 기억해줘: 내일 회의", "메모해줘 xxx")
+- list_messages: 저장된 메시지 목록을 보고 싶어함 (예: "저장된 거 보여줘", "뭐 저장했지?", "메시지 목록")
+- list_all: 전체 메시지를 모두 보고 싶어함 (예: "전체 목록", "다 보여줘", "모든 메시지")
+- clear_messages: 저장된 메시지를 전부 삭제하고 싶어함 (예: "다 지워줘", "초기화", "전부 삭제")
+- delete_message: 특정 메시지를 삭제하고 싶어함 (예: "1번 삭제해줘", "첫번째 거 지워")
+- help: 사용법이나 도움말을 원함 (예: "어떻게 써?", "도움말", "뭘 할 수 있어?")
+- question: 위에 해당하지 않는 일반적인 질문이나 요청 (예: "이거 분석해줘", "비트코인 뉴스", "요약해줘")
+
+[중요]
+- 반드시 위 7개 중 하나만 출력하세요.
+- 다른 설명 없이 의도 이름만 출력하세요.
+- 애매한 경우 question으로 분류하세요.
+
+사용자 메시지: {message}
+
+의도:"""
+
+
+async def classify_intent(message: str) -> tuple[UserIntent, Optional[str]]:
+    """Gemini 2.0 Flash를 사용하여 사용자 의도 분류
+
+    Args:
+        message: 사용자 메시지
+
+    Returns:
+        (의도, 인자) 튜플.
+        - delete_message인 경우: 삭제할 번호 (str)
+        - save_message인 경우: 저장할 내용 (str)
+    """
+    client = genai.Client(api_key=config.GOOGLE_AI_API_KEY)
+
+    try:
+        response = await client.aio.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=INTENT_CLASSIFIER_PROMPT.format(message=message)
+        )
+        intent_str = response.text.strip().lower()
+
+        # 의도 매핑
+        intent_map = {
+            "save_message": UserIntent.SAVE_MESSAGE,
+            "list_messages": UserIntent.LIST_MESSAGES,
+            "list_all": UserIntent.LIST_ALL_MESSAGES,
+            "clear_messages": UserIntent.CLEAR_MESSAGES,
+            "delete_message": UserIntent.DELETE_MESSAGE,
+            "help": UserIntent.HELP,
+            "question": UserIntent.QUESTION,
+        }
+
+        intent = intent_map.get(intent_str, UserIntent.QUESTION)
+
+        print(f"[의도 분류] 메시지: '{message}' → 원본응답: '{intent_str}' → 의도: {intent.value}")
+
+        # 의도별 인자 추출
+        import re
+        arg = None
+
+        if intent == UserIntent.DELETE_MESSAGE:
+            # 삭제할 번호 추출
+            numbers = re.findall(r'\d+', message)
+            if numbers:
+                arg = numbers[0]
+
+        elif intent == UserIntent.SAVE_MESSAGE:
+            # 저장할 내용 추출 (따옴표 안의 내용 또는 키워드 뒤의 내용)
+            # 패턴 1: 따옴표로 감싼 내용 ('xxx' 또는 "xxx")
+            quoted = re.findall(r"['\"](.+?)['\"]", message)
+            if quoted:
+                arg = quoted[0]
+            else:
+                # 패턴 2: "저장해줘", "기억해줘", "메모해줘" 등 앞의 내용
+                patterns = [
+                    r"(.+?)\s*저장해\s*줘?",
+                    r"(.+?)\s*기억해\s*줘?",
+                    r"(.+?)\s*메모해\s*줘?",
+                    r"저장해\s*줘?\s*[:\s]*(.+)",
+                    r"기억해\s*줘?\s*[:\s]*(.+)",
+                    r"메모해\s*줘?\s*[:\s]*(.+)",
+                ]
+                for pattern in patterns:
+                    match = re.search(pattern, message)
+                    if match:
+                        arg = match.group(1).strip()
+                        break
+
+        return intent, arg
+
+    except Exception as e:
+        # 오류 시 기본값으로 question 반환
+        print(f"[의도 분류 오류] {type(e).__name__}: {e}")
+        return UserIntent.QUESTION, None
 
 
 # 도구 이름 -> 사용자 친화적 메시지 템플릿 매핑

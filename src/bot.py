@@ -17,7 +17,7 @@ from src.database import (
     get_message_count,
     delete_message_by_index,
 )
-from src.agent import get_ai_response, search_web_only, search_x_only
+from src.agent import get_ai_response, search_web_only, search_x_only, classify_intent, UserIntent
 from src.tools.xai_tools import SearchError
 
 
@@ -227,44 +227,24 @@ async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT
     await update.message.reply_text(f"✅ 메시지가 저장되었습니다{source_text}")
 
 
-def detect_command_intent(message: str) -> tuple[str | None, str | None]:
-    """자연어에서 명령어 의도 감지
-
-    Returns:
-        (command, argument) 튜플. 감지되지 않으면 (None, None)
-    """
-    msg_lower = message.lower()
-
-    # 저장된 메시지 조회 요청
-    list_keywords = ["저장된 메시지", "저장한 메시지", "메시지 목록", "메시지 리스트",
-                     "뭐 저장", "저장된 거", "저장한 거", "리스트 보여", "목록 보여"]
-    if any(kw in msg_lower for kw in list_keywords):
-        if "전체" in msg_lower or "모두" in msg_lower or "다" in msg_lower:
-            return ("listall", None)
-        return ("list", None)
-
-    # 전체 삭제 요청
-    clear_keywords = ["전부 삭제", "전체 삭제", "모두 삭제", "다 삭제", "다 지워", "전부 지워", "초기화"]
-    if any(kw in msg_lower for kw in clear_keywords):
-        return ("clear", None)
-
-    # 도움말 요청
-    help_keywords = ["도움말", "사용법", "어떻게 사용", "명령어 알려", "뭘 할 수 있"]
-    if any(kw in msg_lower for kw in help_keywords):
-        return ("help", None)
-
-    return (None, None)
-
-
 async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """일반 메시지 처리 - 명령어 감지 또는 AI 응답 생성"""
+    """일반 메시지 처리 - AI 의도 분류 후 실행"""
     user_id = update.effective_user.id
     user_message = update.message.text
 
-    # 자연어 명령어 감지
-    command, arg = detect_command_intent(user_message)
+    # AI 기반 의도 분류 (작은 모델 사용)
+    intent, arg = await classify_intent(user_message)
 
-    if command == "list":
+    # 의도별 처리
+    if intent == UserIntent.SAVE_MESSAGE:
+        if not arg:
+            await update.message.reply_text("❓ 저장할 내용을 입력해주세요.\n예: '안녕하세요' 저장해줘")
+            return
+        await save_message(user_id=user_id, content=arg, is_forwarded=False)
+        await update.message.reply_text(f"✅ 메시지가 저장되었습니다.\n\n저장된 내용: {arg}")
+        return
+
+    if intent == UserIntent.LIST_MESSAGES:
         messages = await get_messages(user_id, limit=10)
         if not messages:
             await update.message.reply_text("📭 저장된 메시지가 없습니다.")
@@ -279,7 +259,7 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(response)
         return
 
-    if command == "listall":
+    if intent == UserIntent.LIST_ALL_MESSAGES:
         messages = await get_messages(user_id, limit=1000)
         if not messages:
             await update.message.reply_text("📭 저장된 메시지가 없습니다.")
@@ -296,7 +276,7 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(response)
         return
 
-    if command == "clear":
+    if intent == UserIntent.CLEAR_MESSAGES:
         deleted_count = await clear_messages(user_id)
         if deleted_count > 0:
             await update.message.reply_text(f"🗑️ {deleted_count}개의 메시지가 삭제되었습니다.")
@@ -304,7 +284,19 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("📭 삭제할 메시지가 없습니다.")
         return
 
-    if command == "help":
+    if intent == UserIntent.DELETE_MESSAGE:
+        if not arg:
+            await update.message.reply_text("❓ 삭제할 메시지 번호를 입력해주세요.\n예: 1번 삭제해줘")
+            return
+        delete_index = int(arg)
+        success = await delete_message_by_index(user_id, delete_index)
+        if success:
+            await update.message.reply_text(f"🗑️ {delete_index}번 메시지가 삭제되었습니다.")
+        else:
+            await update.message.reply_text(f"❌ {delete_index}번 메시지를 찾을 수 없습니다.")
+        return
+
+    if intent == UserIntent.HELP:
         help_message = """📋 명령어 목록
 
 /save <메시지> - 메시지 저장
@@ -320,10 +312,9 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(help_message)
         return
 
-    # AI 응답 생성
+    # QUESTION: AI Agent 호출
     await update.message.reply_text("🤔 생각 중...")
 
-    # 도구 사용 시 상태 메시지를 보내는 비동기 콜백
     async def send_status(message: str):
         await update.message.reply_text(message)
 

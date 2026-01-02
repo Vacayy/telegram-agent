@@ -22,24 +22,33 @@ class UserIntent(str, Enum):
     DELETE_MESSAGE = "delete_message"    # 특정 메시지 삭제
     HELP = "help"                        # 도움말
     QUESTION = "question"                # 일반 질문 (AI Agent 필요)
+    COMPLEX = "complex"                  # 복합 작업 (Task Planner 필요)
 
 
 INTENT_CLASSIFIER_PROMPT = """당신은 사용자 의도를 분류하는 분류기입니다.
 
 사용자 메시지를 분석하여 다음 중 하나의 의도로 분류하세요:
 
-- save_message: 특정 내용을 저장하고 싶어함 (예: "'안녕' 저장해줘", "이거 기억해줘: 내일 회의", "메모해줘 xxx")
-- list_messages: 저장된 메시지 목록을 보고 싶어함 (예: "저장된 거 보여줘", "뭐 저장했지?", "메시지 목록")
-- list_all: 전체 메시지를 모두 보고 싶어함 (예: "전체 목록", "다 보여줘", "모든 메시지")
-- clear_messages: 저장된 메시지를 전부 삭제하고 싶어함 (예: "다 지워줘", "초기화", "전부 삭제")
-- delete_message: 특정 메시지를 삭제하고 싶어함 (예: "1번 삭제해줘", "첫번째 거 지워")
-- help: 사용법이나 도움말을 원함 (예: "어떻게 써?", "도움말", "뭘 할 수 있어?")
-- question: 위에 해당하지 않는 일반적인 질문이나 요청 (예: "이거 분석해줘", "비트코인 뉴스", "요약해줘")
+- save_message: 단순히 특정 내용만 저장 (예: "'안녕' 저장해줘", "메모해줘: 내일 회의")
+- list_messages: 저장된 메시지 목록 조회 (예: "저장된 거 보여줘", "뭐 저장했지?")
+- list_all: 전체 메시지 모두 보기 (예: "전체 목록", "다 보여줘")
+- clear_messages: 저장된 메시지 전부 삭제 (예: "다 지워줘", "초기화")
+- delete_message: 특정 메시지 삭제 (예: "1번 삭제해줘", "첫번째 거 지워")
+- help: 사용법이나 도움말 (예: "어떻게 써?", "도움말")
+- question: 단순 질문이나 분석 요청 (예: "이거 분석해줘", "날씨 알려줘", "요약해줘")
+- complex: 여러 단계가 연결된 복합 작업 요청
+  예: "검색해서 저장해줘", "X에서 찾아서 번역해줘", "뉴스 찾아서 요약해줘"
+
+[중요 - complex 판단 기준]
+다음과 같이 2개 이상의 동작이 순서대로 연결된 경우 complex로 분류:
+- "검색 → 저장", "검색 → 번역", "검색 → 요약"
+- "~해서 ~해줘", "~한 다음 ~해줘", "~하고 ~해줘"
+- 단일 의도로 마무리되지 않고 여러 의도가 연결되어있는 모든 경우
 
 [중요]
-- 반드시 위 7개 중 하나만 출력하세요.
+- 반드시 위 8개 중 하나만 출력하세요.
 - 다른 설명 없이 의도 이름만 출력하세요.
-- 애매한 경우 question으로 분류하세요.
+- 단일 동작이면 question, 복합 동작이면 complex
 
 사용자 메시지: {message}
 
@@ -75,6 +84,7 @@ async def classify_intent(message: str) -> tuple[UserIntent, Optional[str]]:
             "delete_message": UserIntent.DELETE_MESSAGE,
             "help": UserIntent.HELP,
             "question": UserIntent.QUESTION,
+            "complex": UserIntent.COMPLEX,
         }
 
         intent = intent_map.get(intent_str, UserIntent.QUESTION)

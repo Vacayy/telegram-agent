@@ -17,13 +17,13 @@
 | Bot Framework | python-telegram-bot 20+ |
 | AI Framework | LangChain |
 | AI Model (Agent) | xAI Grok (grok-4-1-fast-reasoning) |
-| AI Model (Intent) | Google Gemini 2.0 Flash |
+| AI Model (Intent/Planner) | Google Gemini 2.0 Flash |
 | Database | SQLite (aiosqlite) |
 | Deployment | Railway |
 
 ## 아키텍처
 
-### 2단계 AI 처리 구조
+### 3단계 AI 처리 구조
 
 ```
 사용자 메시지
@@ -37,18 +37,25 @@
 │ clear_messages → 전체 삭제              │
 │ help → 도움말 표시                      │
 │ question → [2단계] AI Agent 호출        │
+│ complex → [3단계] Task Planner 호출     │
 └─────────────────────────────────────────┘
-    ↓ (question인 경우만)
+    ↓ (question인 경우)
 [2단계] AI Agent (Grok - 유료)
     ↓
 웹 검색 / X 검색 / 컨텍스트 분석
+
+    ↓ (complex인 경우)
+[3단계] Task Planner (Gemini - 무료)
+    ↓
+작업 분해 → 순차 실행 (검색 → 번역 → 저장 등)
 ```
 
-### 왜 2단계 구조인가?
+### 왜 3단계 구조인가?
 
 1. **비용 절감**: 단순 명령(저장, 삭제, 목록)은 무료 모델로 처리
 2. **빠른 응답**: 의도가 명확한 요청은 Agent 호출 없이 즉시 처리
 3. **자연어 지원**: 키워드 매칭 대신 AI가 의도를 파악하여 유연한 처리
+4. **복합 작업 처리**: "검색해서 번역 후 저장" 같은 다단계 작업 지원
 
 ## AI 모델 선택 가이드
 
@@ -58,7 +65,7 @@
 
 | 모델 | 역할 | 비용 |
 |------|------|------|
-| Gemini 2.0 Flash | 의도 분류 (7가지) | 무료 |
+| Gemini 2.0 Flash | 의도 분류 (8가지), Task Planner, LLM 도구 | 무료 |
 | Grok grok-4-1-fast-reasoning | AI Agent (검색, 분석) | 유료 |
 
 ### 왜 Grok인가?
@@ -171,6 +178,7 @@ python main.py
 | "다 지워줘" | 전체 메시지 삭제 |
 | "어떻게 써?" | 도움말 표시 |
 | "이거 분석해줘" | AI Agent 호출 |
+| "검색해서 번역 후 저장해줘" | 복합 작업 (Task Planner) |
 
 ### 메시지 저장 방법
 
@@ -208,6 +216,16 @@ python main.py
      ↓
 봇: 🐦 X 검색 결과 (2026-01-02 10:00:00)
     (트위터 트렌드 및 반응)
+
+사용자: X에서 @elon_musk 검색해서 한글로 번역 후 저장해줘
+봇: 🤔 작업 계획 중...
+     ↓
+봇: 🐦 X 검색 중... ('@elon_musk')
+    🌍 번역 중...
+    💾 저장 중...
+     ↓
+봇: ✅ X에서 검색 후 번역하여 저장
+    (번역된 검색 결과)
 ```
 
 ### 인라인 메시지 업데이트
@@ -229,13 +247,18 @@ telegram-agent/
 ├── src/
 │   ├── bot.py           # 텔레그램 봇 핸들러
 │   ├── agent.py         # 의도 분류 + LangChain Agent
+│   ├── planner.py       # Task Planner (복합 작업 분해)
+│   ├── executor.py      # Task Executor (순차 실행)
 │   ├── database.py      # SQLite 데이터베이스
 │   └── tools/
 │       ├── __init__.py
-│       └── xai_tools.py # xAI 검색 도구
+│       ├── xai_tools.py # xAI 검색 도구
+│       └── llm.py       # LLM 도구 (번역, 요약, 분석)
 └── docs/
     ├── PROJECT_SPEC.md  # 프로젝트 기획서
-    └── IMPLEMENTATION.md # 구현 계획
+    ├── IMPLEMENTATION.md # 구현 계획
+    ├── CHANGELOG.md      # 개선 내역
+    └── ARCHITECTURE_IMPROVEMENT.md # 아키텍처 개선 계획
 ```
 
 ## 예상 비용
@@ -251,6 +274,7 @@ telegram-agent/
 
 ## 향후 로드맵
 
+- [x] Phase 1: 복합 의도 처리 (Task Planner)
 - [ ] Phase 2: 문서 분석 (PDF, 이미지 OCR)
 - [ ] Phase 3: 금융 데이터 연동 (주가, 환율)
 - [ ] Phase 4: 자동화 (알림, 스케줄링)

@@ -335,8 +335,114 @@ def _extract_query(self, input_str: str) -> str:
 
 ---
 
+## 9. 복합 의도 처리 시스템 (Task Planner)
+
+### 문제
+기존 의도 분류 시스템은 **단일 의도**만 파악하며, 복합적인 작업 요청을 처리하지 못함.
+
+### 문제 상황
+```
+사용자: "X에서 @elon_musk 의 가장 최신 글을 검색한 다음,
+        이걸 한글로 번역해서 저장해줘."
+
+기대 동작:
+1. X 검색 (@elon_musk 최신 글)
+2. 한글 번역
+3. DB 저장
+
+실제 동작 (이전):
+- 의도 분류: "save_message" (저장해줘 키워드만 인식)
+- 결과: ✅ 메시지가 저장되었습니다.
+        저장된 내용: X에서 @elon_musk 의 가장 최신 글을 검색한 다음...
+```
+
+### 해결
+**Task Planner + Executor 구조 도입**
+
+```
+사용자 메시지
+    ↓
+[1단계] 의도 분류 (Gemini 2.0 Flash)
+    ↓
+┌─────────────────────────────────────────┐
+│ 단순 의도 (7개) → 직접 처리 (기존)       │
+│ 복합 의도 (COMPLEX) → Task Planner      │
+└─────────────────────────────────────────┘
+    ↓ (복합 의도인 경우)
+[2단계] Task Planner - 작업 분해 (Gemini 2.0 Flash)
+    ↓
+[3단계] Task Executor - 순차 실행
+```
+
+**새로 추가된 의도: `COMPLEX`**
+```python
+class UserIntent(str, Enum):
+    SAVE_MESSAGE = "save_message"
+    LIST_MESSAGES = "list_messages"
+    # ... 기존 의도들 ...
+    QUESTION = "question"      # 단순 질문 (AI Agent)
+    COMPLEX = "complex"        # 복합 작업 (Task Planner)
+```
+
+**Task Planner 출력 형식**
+```json
+{
+    "steps": [
+        {"action": "x_search", "params": {"query": "@elon_musk"}, "output_key": "result1"},
+        {"action": "translate", "params": {"text": "$result1", "to": "ko"}, "output_key": "result2"},
+        {"action": "save_message", "params": {"content": "$result2"}}
+    ],
+    "summary": "X에서 검색 후 번역하여 저장"
+}
+```
+
+**사용 가능한 작업 (Actions)**
+| Action | 설명 | 파라미터 |
+|--------|------|----------|
+| `web_search` | 웹 검색 | `query` |
+| `x_search` | X(트위터) 검색 | `query` |
+| `translate` | 텍스트 번역 | `text`, `to` (ko/en/ja/zh) |
+| `summarize` | 텍스트 요약 | `text` |
+| `analyze` | 텍스트 분석 | `text`, `question` (선택) |
+| `save_message` | DB 저장 | `content` |
+
+**Context Chain ($변수 참조)**
+- 이전 단계의 결과를 다음 단계에서 참조 가능
+- `$output_key` 형태로 이전 결과 사용
+- 예: `{"text": "$result1"}` → result1의 값으로 치환
+
+### 구현 파일
+
+| 파일 | 역할 |
+|------|------|
+| `src/agent.py` | `COMPLEX` 의도 추가, 프롬프트 수정 |
+| `src/planner.py` | Task Planner (작업 분해) |
+| `src/executor.py` | Task Executor (순차 실행) |
+| `src/tools/llm.py` | LLM 도구 (번역, 요약, 분석) |
+
+### 성과
+```
+사용자: "X에서 @elon_musk 검색해서 한글로 번역 후 저장해줘"
+
+실제 동작 (개선 후):
+🤔 작업 계획 중...
+🐦 X 검색 중... ('@elon_musk')
+🌍 번역 중...
+💾 저장 중...
+✅ X에서 검색 후 번역하여 저장
+
+(검색 결과가 한글로 번역되어 DB에 저장됨)
+```
+
+- 복합 작업 요청 자동 처리
+- 실시간 진행 상황 표시
+- 단계별 결과 체이닝
+
+---
+
 ## 향후 개선 계획
 
+- [x] **복합 의도 처리 시스템 도입** (9번에서 해결)
 - [ ] 대화 히스토리 기반 멀티턴 대화
 - [ ] PDF/이미지 파일 분석
 - [ ] 예약 알림 기능

@@ -19,6 +19,9 @@ from src.database import (
 )
 from src.agent import get_ai_response, search_web_only, search_x_only, classify_intent, UserIntent
 from src.tools.xai_tools import SearchError
+from src.planner import plan_tasks
+from src.executor import TaskExecutor
+from src.database import get_all_messages_as_context
 
 
 # ==================== 명령어 핸들러 ====================
@@ -310,6 +313,46 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
 포워딩된 메시지는 자동 저장됩니다.
 일반 질문은 AI가 답변합니다."""
         await update.message.reply_text(help_message)
+        return
+
+    # COMPLEX: 복합 작업 처리 (Task Planner + Executor)
+    if intent == UserIntent.COMPLEX:
+        status_msg = await update.message.reply_text("🤔 작업 계획 중...")
+
+        async def update_status(message: str):
+            try:
+                await status_msg.edit_text(message)
+            except Exception as e:
+                print(f"[상태 업데이트 실패] {e}")
+
+        try:
+            # 컨텍스트 로드
+            context_str = await get_all_messages_as_context(user_id)
+
+            # 작업 계획 수립
+            print(f"[Task Planner] 시작: {user_message}")
+            steps, summary = await plan_tasks(user_message, context_str)
+
+            if not steps:
+                # 계획 실패 시 QUESTION으로 폴백
+                print(f"[Task Planner] 계획 실패, QUESTION으로 폴백")
+                await status_msg.edit_text("🤔 생각 중...")
+                response = await get_ai_response(user_id, user_message, update_status)
+                await status_msg.edit_text(response)
+                return
+
+            # 작업 실행
+            print(f"[Task Executor] 시작: {len(steps)}개 단계")
+            executor = TaskExecutor(user_id, update_status)
+            result = await executor.execute(steps, summary)
+            print(f"[Task Executor] 완료")
+
+            await status_msg.edit_text(result)
+
+        except Exception as e:
+            print(f"[복합 작업 오류] {type(e).__name__}: {e}")
+            await status_msg.edit_text(f"❌ 작업 실행 실패\n\n{str(e)}")
+
         return
 
     # QUESTION: AI Agent 호출

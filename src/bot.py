@@ -235,15 +235,25 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
     user_id = update.effective_user.id
     user_message = update.message.text
 
+    print(f"\n{'#'*60}")
+    print(f"[Bot] 새 메시지 수신")
+    print(f"[Bot] user_id: {user_id}")
+    print(f"[Bot] 메시지: '{user_message}'")
+    print(f"{'#'*60}")
+
     # AI 기반 의도 분류 (작은 모델 사용)
     intent, arg = await classify_intent(user_message)
+    print(f"[Bot] 의도 분류 완료: intent={intent.value}, arg={arg}")
 
     # 의도별 처리
     if intent == UserIntent.SAVE_MESSAGE:
+        print(f"[Bot] SAVE_MESSAGE 처리 시작")
         if not arg:
+            print(f"[Bot] 저장할 내용 없음")
             await update.message.reply_text("❓ 저장할 내용을 입력해주세요.\n예: '안녕하세요' 저장해줘")
             return
         await save_message(user_id=user_id, content=arg, is_forwarded=False)
+        print(f"[Bot] DB 저장 완료: {len(arg)}자")
         await update.message.reply_text(f"✅ 메시지가 저장되었습니다.\n\n저장된 내용: {arg}")
         return
 
@@ -317,60 +327,73 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
 
     # COMPLEX: 복합 작업 처리 (Task Planner + Executor)
     if intent == UserIntent.COMPLEX:
+        print(f"\n{'='*60}")
+        print(f"[Bot] COMPLEX 의도 감지 - Task Planner 경로")
+        print(f"{'='*60}")
+
         status_msg = await update.message.reply_text("🤔 작업 계획 중...")
 
         async def update_status(message: str):
             try:
                 await status_msg.edit_text(message)
             except Exception as e:
-                print(f"[상태 업데이트 실패] {e}")
+                print(f"[Bot] 상태 업데이트 실패: {e}")
 
         try:
             # 컨텍스트 로드
+            print(f"[Bot] 컨텍스트 로드 중...")
             context_str = await get_all_messages_as_context(user_id)
+            print(f"[Bot] 컨텍스트 로드 완료: {len(context_str) if context_str else 0}자")
 
             # 작업 계획 수립
-            print(f"[Task Planner] 시작: {user_message}")
             steps, summary = await plan_tasks(user_message, context_str)
 
             if not steps:
                 # 계획 실패 시 QUESTION으로 폴백
-                print(f"[Task Planner] 계획 실패, QUESTION으로 폴백")
+                print(f"[Bot] Task Planner 계획 실패 → QUESTION 폴백")
                 await status_msg.edit_text("🤔 생각 중...")
                 response = await get_ai_response(user_id, user_message, update_status)
                 await status_msg.edit_text(response)
                 return
 
             # 작업 실행
-            print(f"[Task Executor] 시작: {len(steps)}개 단계")
+            print(f"[Bot] TaskExecutor 생성 및 실행")
             executor = TaskExecutor(user_id, update_status)
             result = await executor.execute(steps, summary)
-            print(f"[Task Executor] 완료")
 
+            print(f"[Bot] 최종 결과 전송: {len(result)}자")
             await status_msg.edit_text(result)
 
         except Exception as e:
-            print(f"[복합 작업 오류] {type(e).__name__}: {e}")
+            print(f"[Bot] COMPLEX 처리 오류: {type(e).__name__}: {e}")
+            import traceback
+            print(f"[Bot] 스택 트레이스:\n{traceback.format_exc()}")
             await status_msg.edit_text(f"❌ 작업 실행 실패\n\n{str(e)}")
 
         return
 
     # QUESTION: AI Agent 호출
+    print(f"\n{'='*60}")
+    print(f"[Bot] QUESTION 의도 - AI Agent 경로")
+    print(f"{'='*60}")
+
     status_msg = await update.message.reply_text("🤔 생각 중...")
 
     async def update_status(message: str):
         try:
             await status_msg.edit_text(message)
         except Exception as e:
-            print(f"[상태 업데이트 실패] {e}")
+            print(f"[Bot] 상태 업데이트 실패: {e}")
 
     try:
-        print(f"[AI Agent 호출] 시작: {user_message}")
         response = await get_ai_response(user_id, user_message, update_status)
-        print(f"[AI Agent 호출] 완료: {len(response)}자")
+        print(f"[Bot] AI Agent 응답 수신: {len(response)}자")
         await status_msg.edit_text(response)
+        print(f"[Bot] 응답 전송 완료")
     except Exception as e:
-        print(f"[AI Agent 오류] {type(e).__name__}: {e}")
+        print(f"[Bot] AI Agent 오류: {type(e).__name__}: {e}")
+        import traceback
+        print(f"[Bot] 스택 트레이스:\n{traceback.format_exc()}")
         await status_msg.edit_text(f"❌ 응답 생성 실패\n\n{str(e)}")
 
 

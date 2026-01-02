@@ -66,14 +66,23 @@ async def classify_intent(message: str) -> tuple[UserIntent, Optional[str]]:
         - delete_message인 경우: 삭제할 번호 (str)
         - save_message인 경우: 저장할 내용 (str)
     """
+    print(f"\n{'='*60}")
+    print(f"[의도 분류] 시작")
+    print(f"[의도 분류] 입력 메시지: '{message}'")
+    print(f"[의도 분류] 모델: gemini-2.0-flash")
+
     client = genai.Client(api_key=config.GOOGLE_AI_API_KEY)
 
     try:
+        prompt = INTENT_CLASSIFIER_PROMPT.format(message=message)
+        print(f"[의도 분류] 프롬프트 길이: {len(prompt)}자")
+
         response = await client.aio.models.generate_content(
             model="gemini-2.0-flash",
-            contents=INTENT_CLASSIFIER_PROMPT.format(message=message)
+            contents=prompt
         )
         intent_str = response.text.strip().lower()
+        print(f"[의도 분류] LLM 원본 응답: '{response.text.strip()}'")
 
         # 의도 매핑
         intent_map = {
@@ -89,25 +98,30 @@ async def classify_intent(message: str) -> tuple[UserIntent, Optional[str]]:
 
         intent = intent_map.get(intent_str, UserIntent.QUESTION)
 
-        print(f"[의도 분류] 메시지: '{message}' → 원본응답: '{intent_str}' → 의도: {intent.value}")
+        print(f"[의도 분류] 매핑 결과: '{intent_str}' → {intent.value}")
 
         # 의도별 인자 추출
         import re
         arg = None
 
         if intent == UserIntent.DELETE_MESSAGE:
+            print(f"[의도 분류] DELETE_MESSAGE - 번호 추출 시도")
             # 삭제할 번호 추출
             numbers = re.findall(r'\d+', message)
             if numbers:
                 arg = numbers[0]
+                print(f"[의도 분류] 추출된 번호: {arg}")
 
         elif intent == UserIntent.SAVE_MESSAGE:
+            print(f"[의도 분류] SAVE_MESSAGE - 저장 내용 추출 시도")
             # 저장할 내용 추출 (따옴표 안의 내용 또는 키워드 뒤의 내용)
             # 패턴 1: 따옴표로 감싼 내용 ('xxx' 또는 "xxx")
             quoted = re.findall(r"['\"](.+?)['\"]", message)
             if quoted:
                 arg = quoted[0]
+                print(f"[의도 분류] 따옴표에서 추출: '{arg}'")
             else:
+                print(f"[의도 분류] 따옴표 없음, 패턴 매칭 시도")
                 # 패턴 2: "저장해줘", "기억해줘", "메모해줘" 등 앞의 내용
                 patterns = [
                     r"(.+?)\s*저장해\s*줘?",
@@ -121,13 +135,18 @@ async def classify_intent(message: str) -> tuple[UserIntent, Optional[str]]:
                     match = re.search(pattern, message)
                     if match:
                         arg = match.group(1).strip()
+                        print(f"[의도 분류] 패턴 '{pattern}'에서 추출: '{arg}'")
                         break
 
+        print(f"[의도 분류] 최종 결과: intent={intent.value}, arg={arg}")
+        print(f"{'='*60}\n")
         return intent, arg
 
     except Exception as e:
         # 오류 시 기본값으로 question 반환
-        print(f"[의도 분류 오류] {type(e).__name__}: {e}")
+        print(f"[의도 분류] 오류 발생: {type(e).__name__}: {e}")
+        print(f"[의도 분류] 기본값 QUESTION 반환")
+        print(f"{'='*60}\n")
         return UserIntent.QUESTION, None
 
 
@@ -254,6 +273,11 @@ SYSTEM_PROMPT = """당신은 사용자의 개인 AI 비서입니다.
 
 def create_agent():
     """LangChain Agent 생성 (xAI Grok 사용)"""
+    print(f"\n{'='*60}")
+    print(f"[Agent 생성] 시작")
+    print(f"[Agent 생성] 모델: grok-4-1-fast-reasoning")
+    print(f"[Agent 생성] API: https://api.x.ai/v1")
+
     # xAI Grok API는 OpenAI 호환 API를 제공
     llm = ChatOpenAI(
         model="grok-4-1-fast-reasoning",
@@ -263,6 +287,7 @@ def create_agent():
     )
 
     tools = get_tools()
+    print(f"[Agent 생성] 사용 가능한 도구: {[t.name for t in tools]}")
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
@@ -272,14 +297,19 @@ def create_agent():
     ])
 
     agent = create_openai_tools_agent(llm, tools, prompt)
+    print(f"[Agent 생성] Agent 인스턴스 생성 완료")
 
-    return AgentExecutor(
+    executor = AgentExecutor(
         agent=agent,
         tools=tools,
         verbose=True,
         handle_parsing_errors=True,
         max_iterations=5
     )
+    print(f"[Agent 생성] AgentExecutor 생성 완료 (max_iterations=5)")
+    print(f"{'='*60}\n")
+
+    return executor
 
 
 async def get_ai_response(
@@ -297,18 +327,27 @@ async def get_ai_response(
     Returns:
         AI 응답 문자열
     """
+    print(f"\n{'='*60}")
+    print(f"[AI 응답] 시작")
+    print(f"[AI 응답] user_id: {user_id}")
+    print(f"[AI 응답] 메시지: '{user_message}'")
+
     try:
         # 저장된 메시지 컨텍스트 가져오기
-        print(f"[get_ai_response] 컨텍스트 로드 중...")
+        print(f"[AI 응답] 컨텍스트 로드 중...")
         context = await get_all_messages_as_context(user_id)
-        print(f"[get_ai_response] 컨텍스트 로드 완료: {len(context)}자")
+        context_preview = context[:200] + "..." if len(context) > 200 else context
+        print(f"[AI 응답] 컨텍스트 로드 완료: {len(context)}자")
+        print(f"[AI 응답] 컨텍스트 미리보기: {context_preview}")
 
         # 콜백 핸들러 생성
         tool_callback = ToolStatusCallback(status_callback)
+        print(f"[AI 응답] ToolStatusCallback 생성됨")
 
-        # Agent 실행 (비동기)
-        print(f"[get_ai_response] Agent 실행 중...")
+        # Agent 생성 및 실행
         agent_executor = create_agent()
+
+        print(f"[AI 응답] Agent.ainvoke() 호출 중...")
         result = await agent_executor.ainvoke(
             {
                 "input": user_message,
@@ -317,12 +356,20 @@ async def get_ai_response(
             },
             config={"callbacks": [tool_callback]}
         )
-        print(f"[get_ai_response] Agent 완료")
 
-        return result.get("output", "죄송합니다. 응답을 생성하지 못했습니다.")
+        output = result.get("output", "죄송합니다. 응답을 생성하지 못했습니다.")
+        print(f"[AI 응답] Agent 실행 완료")
+        print(f"[AI 응답] 응답 길이: {len(output)}자")
+        print(f"[AI 응답] 응답 미리보기: {output[:200]}...")
+        print(f"{'='*60}\n")
+
+        return output
 
     except Exception as e:
-        print(f"[get_ai_response 오류] {type(e).__name__}: {e}")
+        print(f"[AI 응답] 오류 발생: {type(e).__name__}: {e}")
+        import traceback
+        print(f"[AI 응답] 스택 트레이스:\n{traceback.format_exc()}")
+        print(f"{'='*60}\n")
         return f"오류가 발생했습니다: {str(e)}"
 
 

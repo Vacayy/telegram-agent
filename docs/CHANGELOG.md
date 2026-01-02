@@ -440,9 +440,461 @@ class UserIntent(str, Enum):
 
 ---
 
+## [문제] Task Planner 세부 조건 누락
+
+### 문제
+Task Planner가 사용자 요청의 세부 조건(개수, 언어 등)을 제대로 반영하지 못함.
+
+### 문제 상황 예시
+```
+사용자: "X에서 @elon_musk 의 가장 최신 글 3개를 검색한 다음,
+        이걸 요약하고 한글로 번역해서 저장해줘."
+
+Task Planner 출력:
+{
+    "steps": [
+        {"action": "x_search", "params": {"query": "@elon_musk"}, ...},
+        {"action": "summarize", "params": {"text": "$search_result"}, ...},
+        {"action": "translate", "params": {"text": "$summarized", "to": "ko"}, ...},
+        {"action": "save_message", "params": {"content": "$translated"}}
+    ]
+}
+
+문제점:
+1. 사용자가 "3개"를 요청했으나, x_search에 count 파라미터가 없음
+   → 사용자 의도와 무관하게, 실제로는 5개 게시물이 반환됨
+
+2. summarize가 이미 한국어로 요약을 반환
+   → translate 단계가 "한국어 → 한국어" 불필요한 번역 수행
+```
+
+### 실제 로그 분석
+```
+[Step 2 입력] summarize with {'text': '**Elon Musk (@elonmusk)**...'}
+[Step 2 출력] '2026년 1월 2일 기준, Elon Musk는 2억 3천만 명...' (172자)
+             ↑ 이미 한국어로 요약됨
+
+[Step 3 입력] translate with {'text': '2026년 1월 2일 기준...', 'to': 'ko'}
+[Step 3 출력] '2026년 1월 2일 현재, 일론 머스크는...' (203자)
+             ↑ 한국어 → 한국어 번역 (불필요)
+```
+
+### 근본 원인
+
+1. **검색 도구의 파라미터 제한**
+   - `x_search`가 `query`만 받고 `count` 파라미터를 지원하지 않음
+   - Task Planner가 개수 조건을 반영할 방법이 없음
+
+2. **LLM 도구의 언어 비명시**
+   - `summarize()`가 출력 언어를 지정하지 않음
+   - Gemini가 입력 언어와 무관하게 한국어로 요약하는 경향
+
+3. **Task Planner 프롬프트 한계**
+   - 사용자 요청의 세부 조건을 파라미터로 매핑하는 규칙 부족
+
+### 필요한 개선 방향
+
+**Option 1: 검색 도구에 count 파라미터 추가**
+```python
+# xai_tools.py
+async def search_x(query: str, count: int = 5) -> str:
+    prompt = f"Search X for: {query}. Return {count} most recent posts."
+
+# planner.py 프롬프트 수정
+- x_search: X 검색 (params: query, count - 기본값 5)
+```
+
+**Option 2: LLM 도구에 언어 파라미터 추가**
+```python
+# llm.py
+async def summarize(text: str, language: str = "same") -> str:
+    # language="same": 입력과 동일한 언어로 출력
+    # language="ko": 한국어로 요약
+    # language="en": 영어로 요약
+```
+
+**Option 3: Task Planner 프롬프트 개선**
+```
+[파라미터 매핑 규칙]
+- 사용자가 "N개"를 요청하면 count: N 파라미터 추가
+- "한글로", "영어로" 요청 시 to 파라미터에 반영
+- 요약 후 번역이 필요한 경우, summarize의 언어와 translate의 to가 다른지 확인
+```
+
+### 해결
+
+**3계층 동기화 원칙을 적용하여 모든 계층을 수정:**
+
+#### Layer 3: 실행 코드 수정
+
+**xai_tools.py** - count 파라미터 추가
+```python
+def _call_xai_with_tool(query: str, tool_name: str, count: int = None) -> str:
+    if count is not None and count > 0:
+        query = f"{query} (Return exactly {count} most recent results)"
+    ...
+
+async def search_x(query: str, count: int = None) -> str:
+    return _call_xai_with_tool(query, "x_search", count)
+```
+
+**llm.py** - language 파라미터 추가
+```python
+async def summarize(text: str, language: str = "same") -> str:
+    language_map = {
+        "same": "입력 텍스트와 동일한 언어로",
+        "ko": "한국어로",
+        "en": "영어로",
+        ...
+    }
+    lang_instruction = language_map.get(language, "입력 텍스트와 동일한 언어로")
+    prompt = f"...{lang_instruction} 요약문만 출력하세요."
+```
+
+#### Layer 2: Executor 수정
+
+**executor.py** - 새 파라미터 전달
+```python
+elif action == "x_search":
+    return await search_x(
+        query=params.get("query", ""),
+        count=params.get("count")  # 추가
+    )
+
+elif action == "summarize":
+    return await summarize(
+        text=params.get("text", ""),
+        language=params.get("language", "same")  # 추가
+    )
+```
+
+#### Layer 1: 프롬프트 수정
+
+**planner.py** - 파라미터 설명 및 규칙 추가
+```python
+TASK_PLANNER_PROMPT = """
+[사용 가능한 작업]
+- x_search: X(트위터)에서 검색
+  params: query (검색어), count (결과 개수, 선택)
+- summarize: 텍스트 요약
+  params: text (요약할 텍스트), language (출력 언어: same/ko/en/ja/zh, 선택)
+
+[규칙]
+...
+6. 사용자가 지정한 조건은 반드시 params에 반영:
+   - "3개", "5개" 등 개수 → count 파라미터
+   - "한글로", "영어로" 등 언어 → language 또는 to 파라미터
+7. 요약+번역이 필요하면 summarize의 language로 처리 (별도 translate 불필요)
+8. 요약 없이 번역만 필요하면 translate 사용
+"""
+```
+
+### 성과
+```
+사용자: "X에서 @elon_musk 의 가장 최신 글 3개를 검색한 다음,
+        이걸 요약하고 한글로 번역해서 저장해줘."
+
+개선 전 Task Planner 출력:
+{
+    "steps": [
+        {"action": "x_search", "params": {"query": "@elon_musk"}},
+        {"action": "summarize", "params": {"text": "$search_result"}},
+        {"action": "translate", "params": {"text": "$summarized", "to": "ko"}},
+        {"action": "save_message", "params": {"content": "$translated"}}
+    ]
+}
+→ count 누락, 불필요한 translate 단계
+
+개선 후 Task Planner 출력:
+{
+    "steps": [
+        {"action": "x_search", "params": {"query": "@elon_musk", "count": 3}},
+        {"action": "summarize", "params": {"text": "$search_result", "language": "ko"}},
+        {"action": "save_message", "params": {"content": "$summarized"}}
+    ]
+}
+→ count 반영, summarize에서 직접 한국어 출력 (translate 불필요)
+```
+
+- 사용자 조건이 파라미터로 정확히 반영됨
+- 불필요한 단계 자동 제거 (요약+번역 → summarize(language="ko"))
+- 3계층 동기화로 프롬프트-스키마-코드 일치
+
+---
+
+## 교훈: AI 구조화 출력(Structured Output) 설계
+
+위 문제는 **LLM 기반 시스템에서 구조화된 출력을 설계할 때 흔히 발생하는 이슈**입니다.
+Function Calling, Tool Use, JSON Mode 등을 사용하는 모든 AI 시스템에 적용되는 교훈을 정리합니다.
+
+### 핵심 원칙: "LLM에게 선택지가 없으면, 선택할 수 없다"
+
+```
+사용자 요청: "3개만 검색해줘"
+     ↓
+프롬프트 스키마: {"action": "search", "params": {"query": "..."}}
+     ↓
+LLM 출력: {"action": "search", "params": {"query": "..."}}
+          ↑ count를 넣을 곳이 없음!
+```
+
+LLM이 아무리 "3개"라는 조건을 이해해도, **스키마에 `count` 필드가 없으면 반영할 방법이 없습니다**.
+
+### 3계층 동기화 법칙
+
+AI 구조화 출력 시스템은 3개 계층이 **완벽히 동기화**되어야 합니다:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  [1] 프롬프트 (Prompt)                                       │
+│      - 사용 가능한 파라미터 설명                              │
+│      - 예: "count: 결과 개수 (선택, 기본값 5)"                │
+├─────────────────────────────────────────────────────────────┤
+│  [2] 스키마 (Schema)                                         │
+│      - JSON/Function 정의                                    │
+│      - 예: {"query": str, "count": int}                     │
+├─────────────────────────────────────────────────────────────┤
+│  [3] 실행 코드 (Implementation)                              │
+│      - 실제 함수 시그니처                                     │
+│      - 예: def search(query: str, count: int = 5)           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**하나라도 불일치하면 문제 발생:**
+
+| 불일치 유형 | 증상 |
+|------------|------|
+| 프롬프트 ≠ 스키마 | LLM이 파라미터를 알아도 출력 못함 |
+| 스키마 ≠ 코드 | JSON 파싱 후 실행 오류 |
+| 프롬프트 ≠ 코드 | LLM이 존재하지 않는 기능 호출 |
+
+### 현재 프로젝트의 불일치 사례
+
+**문제 1: count 파라미터**
+```
+[프롬프트] x_search: X 검색 (params: query)     ← count 설명 없음
+[스키마]  {"query": "..."}                      ← count 필드 없음
+[코드]    search_x(query: str)                  ← count 파라미터 없음
+```
+
+**문제 2: 언어 파라미터**
+```
+[프롬프트] summarize: 요약 (params: text)       ← language 설명 없음
+[스키마]  {"text": "..."}                       ← language 필드 없음
+[코드]    summarize(text: str)                  ← 암시적으로 한국어 출력
+```
+
+### 올바른 설계 예시
+
+```python
+# [1] 프롬프트
+"""
+[사용 가능한 작업]
+- x_search: X(트위터) 검색
+  params:
+    - query (필수): 검색어
+    - count (선택): 결과 개수 (기본값 5, 최대 20)
+
+- summarize: 텍스트 요약
+  params:
+    - text (필수): 요약할 텍스트
+    - language (선택): 출력 언어 (기본값: 입력과 동일)
+      - "same": 입력 언어 유지
+      - "ko": 한국어
+      - "en": 영어
+"""
+
+# [2] 스키마 (JSON 예시)
+{
+    "action": "x_search",
+    "params": {
+        "query": "@elon_musk",
+        "count": 3
+    }
+}
+
+# [3] 실행 코드
+async def search_x(query: str, count: int = 5) -> str:
+    prompt = f"Search X for: {query}. Return {count} most recent posts."
+    ...
+```
+
+### 체크리스트: 구조화 출력 설계 시
+
+- [ ] **파라미터 완전성**: 사용자가 지정할 수 있는 모든 조건이 파라미터로 존재하는가?
+- [ ] **프롬프트 명시성**: 각 파라미터의 용도, 타입, 기본값이 프롬프트에 설명되어 있는가?
+- [ ] **스키마 일치**: 프롬프트에 설명된 파라미터가 스키마에 모두 정의되어 있는가?
+- [ ] **코드 동기화**: 스키마의 필드를 실행 코드가 모두 처리하는가?
+- [ ] **암시적 동작 제거**: 코드가 프롬프트에 설명되지 않은 동작을 하지 않는가?
+
+### 적용 범위
+
+이 원칙은 다음 기술에 모두 적용됩니다:
+- OpenAI Function Calling
+- Anthropic Tool Use
+- Google Gemini Function Declarations
+- LangChain Tools / Agents
+- 커스텀 JSON 출력 파싱
+
+---
+
+## 11. 상세 로깅 시스템 추가
+
+### 배경
+AI 시스템의 동작을 이해하고 디버깅하기 위해 각 모듈에 상세한 로깅이 필요했습니다.
+- AI의 사고 과정 추적
+- 도구 호출 흐름 파악
+- 변수 치환 및 파라미터 전달 확인
+- 오류 발생 시 원인 분석
+
+### 해결
+
+**6개 파일에 일관된 로깅 패턴 적용:**
+
+| 파일 | 로깅 내용 |
+|------|----------|
+| agent.py | 의도 분류 과정, LLM 응답, Agent 생성, 도구 호출 상태 |
+| planner.py | Task 분해 과정, JSON 파싱, 단계별 계획 출력 |
+| executor.py | 단계별 실행, 변수 치환($var → 값), 결과 미리보기 |
+| xai_tools.py | xAI API 호출, 쿼리 변환, 응답 추출 |
+| llm.py | translate/summarize/analyze 호출, 언어 설정, 결과 |
+| bot.py | 메시지 수신, 의도 분류 결과, 처리 경로 |
+
+**로깅 패턴:**
+```python
+print(f"\n{'='*60}")           # 섹션 시작 (주요 모듈)
+print(f"[모듈명] 작업 시작")
+print(f"[모듈명] 입력: '{value}'")
+print(f"[모듈명] 결과: {len(result)}자")
+print(f"{'─'*40}")             # 하위 섹션 구분
+print(f"{'='*60}\n")           # 섹션 종료
+```
+
+**로그 출력 예시:**
+```
+##############################################################
+[Bot] 새 메시지 수신
+[Bot] user_id: 12345
+[Bot] 메시지: 'X에서 @elon_musk 검색해서 한글로 요약 후 저장해줘'
+##############################################################
+
+============================================================
+[의도 분류] 시작
+[의도 분류] 입력 메시지: 'X에서 @elon_musk 검색해서...'
+[의도 분류] LLM 원본 응답: 'complex'
+[의도 분류] 최종 결과: intent=complex, arg=None
+============================================================
+
+[Bot] COMPLEX 의도 감지 - Task Planner 경로
+
+============================================================
+[Task Planner] 시작
+[Task Planner] 분해된 단계: 3개
+[Task Planner]   Step 1: x_search
+[Task Planner]     params: {"query": "@elon_musk", "count": 3}
+[Task Planner]   Step 2: summarize
+[Task Planner]   Step 3: save_message
+============================================================
+
+============================================================
+[Executor] 실행 시작
+[Executor] Step 1/3: x_search
+────────────────────────────────────────
+[xAI Tool] x_search 호출
+[xAI Tool] 결과 미리보기: Elon Musk tweeted...
+────────────────────────────────────────
+
+[Executor] Step 2/3: summarize
+[Executor] 변수 치환: $search_result → (1523자)
+────────────────────────────────────────
+[LLM summarize] 시작
+[LLM summarize] 출력 언어: ko
+[LLM summarize] 완료: 245자
+────────────────────────────────────────
+
+[Executor] Step 3/3: save_message
+[Executor] 변수 치환: $summarized → (245자)
+[Executor] DB 저장 완료
+
+────────────────────────────────────────
+[Executor] 전체 실행 완료
+[Executor] 성공: 3/3
+============================================================
+```
+
+### 성과
+- AI 처리 흐름을 실시간으로 확인 가능
+- 디버깅 시간 대폭 단축
+- 변수 치환 문제 즉시 발견 가능
+
+---
+
+## 12. Task Planner 변수 참조 버그 수정
+
+### 문제
+Task Planner가 `$summarized` 대신 `summarized`로 출력하여 변수 치환이 실패하는 문제 발생.
+
+**문제 로그:**
+```
+[Executor] Step 3/3: save_message
+[Executor] 원본 params: {"content": "summarized"}  ← $ 기호 누락!
+[Executor] save_message 호출: content길이=10자
+[Executor] DB 저장 완료
+저장된 내용: "summarized"  ← 요약 결과가 아닌 문자열 저장
+```
+
+### 원인 분석
+LLM이 프롬프트의 `$변수명` 규칙을 가끔 무시하고 `$` 기호 없이 출력.
+
+### 해결
+
+**1. 프롬프트 강화 (planner.py)**
+```python
+[규칙]
+1. [중요] 이전 단계 결과를 참조할 때 반드시 "$" 기호를 붙여야 함
+   - 올바른 예: "$search_result", "$summarized"
+   - 잘못된 예: "search_result", "summarized" ($ 없으면 변수 참조 안됨!)
+```
+
+**2. 방어 로직 추가 (executor.py)**
+```python
+def _resolve_params(self, params: dict) -> dict:
+    for key, value in params.items():
+        if isinstance(value, str):
+            # Case 1: $변수명 형태 (정상)
+            if value.startswith("$"):
+                var_name = value[1:]
+                if var_name in self.context_chain:
+                    resolved[key] = self.context_chain[var_name]
+                    print(f"[Executor] 변수 치환: ${var_name} → ...")
+            # Case 2: $ 없이 변수명만 있는 경우 (LLM 오류 방어)
+            elif value in self.context_chain:
+                resolved[key] = self.context_chain[value]
+                print(f"[Executor] 변수 치환 ($ 누락 보정): {value} → ...")
+```
+
+**수정 후 로그:**
+```
+[Executor] Step 3/3: save_message
+[Executor] 원본 params: {"content": "summarized"}
+[Executor] 변수 치환 ($ 누락 보정): summarized → (245자)
+[Executor] save_message 호출: content길이=245자
+[Executor] DB 저장 완료
+```
+
+### 교훈
+- LLM 출력은 100% 신뢰할 수 없음
+- 중요한 문법 규칙은 프롬프트에서 강조 + 코드에서 방어 로직 구현
+- **이중 방어 원칙**: 프롬프트 개선 + 코드 폴백
+
+---
+
 ## 향후 개선 계획
 
 - [x] **복합 의도 처리 시스템 도입** (9번에서 해결)
+- [x] **Task Planner 세부 조건 처리 개선** (3계층 동기화로 해결)
+- [x] **상세 로깅 시스템** (11번에서 해결)
+- [x] **변수 참조 버그 수정** (12번에서 해결)
 - [ ] 대화 히스토리 기반 멀티턴 대화
 - [ ] PDF/이미지 파일 분석
 - [ ] 예약 알림 기능

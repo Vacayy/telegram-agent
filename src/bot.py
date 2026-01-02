@@ -15,6 +15,7 @@ from src.database import (
     get_messages,
     clear_messages,
     get_message_count,
+    get_message_by_index,
     delete_message_by_index,
 )
 from src.agent import get_ai_response, search_web_only, search_x_only, classify_intent, UserIntent
@@ -98,7 +99,7 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     count = await get_message_count(user_id)
-    response = f"📋 저장된 메시지 ({count}개 중 최근 10개)\n\n"
+    response = f"📋 저장된 메시지 | 최근 10개까지 노출됩니다 (Total: {count}))\n\n"
 
     for i, msg in enumerate(messages, 1):
         content_preview = msg["content"][:100] + "..." if len(msg["content"]) > 100 else msg["content"]
@@ -263,7 +264,7 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("📭 저장된 메시지가 없습니다.")
             return
         count = await get_message_count(user_id)
-        response = f"📋 저장된 메시지 ({count}개 중 최근 10개)\n\n"
+        response = f"📋 저장된 메시지 | 최근 10개까지 노출됩니다 (Total: {count}))\n\n"
         for i, msg in enumerate(messages, 1):
             content_preview = msg["content"][:100] + "..." if len(msg["content"]) > 100 else msg["content"]
             source = "[포워딩]" if msg["is_forwarded"] else "[직접]"
@@ -289,23 +290,64 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(response)
         return
 
+    if intent == UserIntent.GET_MESSAGE:
+        print(f"[Bot] GET_MESSAGE 처리 시작")
+        if not arg:
+            print(f"[Bot] 조회할 번호 없음")
+            await update.message.reply_text("❓ 조회할 메시지 번호를 입력해주세요.\n예: 1번 메시지 알려줘")
+            return
+        get_index = int(arg)
+        message = await get_message_by_index(user_id, get_index)
+        if message:
+            source = "[포워딩]" if message["is_forwarded"] else "[직접]"
+            forward_info = f" (출처: {message['forward_from']})" if message.get("forward_from") else ""
+            time_str = message["created_at"][:16] if message.get("created_at") else ""
+            response = f"📄 {get_index}번 메시지 {source}{forward_info}\n"
+            response += f"📅 {time_str}\n\n"
+            response += message["content"]
+            print(f"[Bot] {get_index}번 메시지 조회 성공: {len(message['content'])}자")
+            await update.message.reply_text(response)
+        else:
+            print(f"[Bot] {get_index}번 메시지 없음")
+            await update.message.reply_text(f"❌ {get_index}번 메시지를 찾을 수 없습니다.")
+        return
+
     if intent == UserIntent.CLEAR_MESSAGES:
-        deleted_count = await clear_messages(user_id)
-        if deleted_count > 0:
-            await update.message.reply_text(f"🗑️ {deleted_count}개의 메시지가 삭제되었습니다.")
+        print(f"[Bot] CLEAR_MESSAGES 처리 시작")
+        # 삭제 전 메시지 개수 확인 후 사용자에게 명령어 안내
+        count = await get_message_count(user_id)
+        if count > 0:
+            response = f"⚠️ 정말 {count}개의 메시지를 모두 삭제하시겠습니까?\n\n"
+            response += f"이 작업은 되돌릴 수 없습니다.\n\n"
+            response += f"정말 삭제하시려면 다음 명령어를 입력하세요:\n"
+            response += f"/clear"
+            print(f"[Bot] {count}개 메시지 전체 삭제 확인 안내")
+            await update.message.reply_text(response)
         else:
             await update.message.reply_text("📭 삭제할 메시지가 없습니다.")
         return
 
     if intent == UserIntent.DELETE_MESSAGE:
+        print(f"[Bot] DELETE_MESSAGE 처리 시작")
         if not arg:
+            print(f"[Bot] 삭제할 번호 없음")
             await update.message.reply_text("❓ 삭제할 메시지 번호를 입력해주세요.\n예: 1번 삭제해줘")
             return
         delete_index = int(arg)
-        success = await delete_message_by_index(user_id, delete_index)
-        if success:
-            await update.message.reply_text(f"🗑️ {delete_index}번 메시지가 삭제되었습니다.")
+        # 삭제 전 메시지 내용 확인 후 사용자에게 명령어 안내
+        message = await get_message_by_index(user_id, delete_index)
+        if message:
+            content_preview = message["content"][:100] + "..." if len(message["content"]) > 100 else message["content"]
+            source = "[포워딩]" if message["is_forwarded"] else "[직접]"
+            response = f"⚠️ 삭제하려는 메시지:\n\n"
+            response += f"📄 {delete_index}번 {source}\n"
+            response += f"{content_preview}\n\n"
+            response += f"정말 삭제하시려면 다음 명령어를 입력하세요:\n"
+            response += f"/delete {delete_index}"
+            print(f"[Bot] {delete_index}번 메시지 삭제 확인 안내")
+            await update.message.reply_text(response)
         else:
+            print(f"[Bot] {delete_index}번 메시지 없음")
             await update.message.reply_text(f"❌ {delete_index}번 메시지를 찾을 수 없습니다.")
         return
 

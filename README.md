@@ -33,8 +33,9 @@
 ┌─────────────────────────────────────────┐
 │ save_message → DB 저장                  │
 │ list_messages → 메시지 목록 조회         │
-│ delete_message → 메시지 삭제            │
-│ clear_messages → 전체 삭제              │
+│ get_message → 특정 메시지 조회           │
+│ delete_message → 삭제 확인 안내          │
+│ clear_messages → 전체 삭제 확인 안내      │
 │ help → 도움말 표시                      │
 │ question → [2단계] AI Agent 호출        │
 │ complex → [3단계] Task Planner 호출     │
@@ -65,7 +66,7 @@
 
 | 모델 | 역할 | 비용 |
 |------|------|------|
-| Gemini 2.0 Flash | 의도 분류 (8가지), Task Planner, LLM 도구 | 무료 |
+| Gemini 2.0 Flash | 의도 분류 (9가지), Task Planner, LLM 도구 | 무료 |
 | Grok grok-4-1-fast-reasoning | AI Agent (검색, 분석) | 유료 |
 
 ### 왜 Grok인가?
@@ -174,8 +175,9 @@ python main.py
 |-------------|------|
 | "'안녕하세요' 저장해줘" | 메시지 저장 |
 | "저장된 거 보여줘" | 메시지 목록 조회 |
-| "1번 삭제해줘" | 특정 메시지 삭제 |
-| "다 지워줘" | 전체 메시지 삭제 |
+| "1번 메시지 알려줘" | 특정 메시지 내용 조회 |
+| "1번 삭제해줘" | 삭제 확인 안내 → `/delete 1` 입력 필요 |
+| "다 지워줘" | 전체 삭제 확인 안내 → `/clear` 입력 필요 |
 | "어떻게 써?" | 도움말 표시 |
 | "이거 분석해줘" | AI Agent 호출 |
 | "검색해서 번역 후 저장해줘" | 복합 작업 (Task Planner) |

@@ -115,6 +115,17 @@ async def get_message_count(user_id: int) -> int:
         return result[0] if result else 0
 
 
+async def get_message_by_index(user_id: int, index: int) -> Optional[dict]:
+    """인덱스(1부터 시작)로 메시지 조회 (최신순 기준)"""
+    messages = await get_messages(user_id, limit=1000)
+
+    if not messages or index < 1 or index > len(messages):
+        return None
+
+    # 인덱스는 1부터 시작, 리스트는 0부터
+    return messages[index - 1]
+
+
 async def delete_message_by_index(user_id: int, index: int) -> bool:
     """인덱스(1부터 시작)로 메시지 삭제 (최신순 기준)"""
     messages = await get_messages(user_id, limit=1000)

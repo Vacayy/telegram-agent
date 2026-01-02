@@ -889,13 +889,196 @@ def _resolve_params(self, params: dict) -> dict:
 
 ---
 
+## 13. 의도 분류 오류: "N번 메시지" 조회 vs 삭제 혼동
+
+### 문제
+"1번 메시지 내용 알려줘"가 `delete_message`로 잘못 분류되는 문제 발생.
+
+### 문제 상황
+```
+사용자: "1번 메시지 내용 알려줘"
+
+기대 동작: 1번 메시지의 내용을 조회하여 보여줌
+
+실제 동작:
+[의도 분류] LLM 원본 응답: 'delete_message'
+→ 1번 메시지가 삭제됨!
+```
+
+### 원인 분석
+
+**1. `get_message` 의도 부재**
+- 현재 8개 의도: save, list, list_all, clear, delete, help, question, complex
+- 특정 메시지 조회(get) 의도가 없음
+- "N번 메시지"라는 표현이 delete_message로 오분류
+
+**2. 프롬프트 모호성**
+```python
+# 현재 프롬프트
+- delete_message: 특정 메시지 삭제 (예: "1번 삭제해줘", "첫번째 거 지워")
+```
+- "N번 메시지" 패턴이 delete_message 예시에만 언급됨
+- "알려줘", "보여줘" 등 조회 동사가 있어도 숫자 패턴으로 delete_message 매칭
+
+**3. 동사 구분 실패**
+| 표현 | 동사 | 기대 의도 | 실제 분류 |
+|------|------|-----------|-----------|
+| "1번 삭제해줘" | 삭제하다 | delete_message | delete_message ✓ |
+| "1번 지워줘" | 지우다 | delete_message | delete_message ✓ |
+| "1번 메시지 알려줘" | 알려주다 | get_message | delete_message ✗ |
+| "1번 내용 보여줘" | 보여주다 | get_message | delete_message ✗ |
+
+### 해결
+`get_message` 의도 추가 및 프롬프트에서 조회/삭제 동사 명확히 구분.
+
+**변경 전 (8개 의도):**
+```python
+class UserIntent(str, Enum):
+    SAVE_MESSAGE = "save_message"
+    LIST_MESSAGES = "list_messages"
+    LIST_ALL_MESSAGES = "list_all"
+    CLEAR_MESSAGES = "clear_messages"
+    DELETE_MESSAGE = "delete_message"
+    HELP = "help"
+    QUESTION = "question"
+    COMPLEX = "complex"
+```
+
+**변경 후 (9개 의도):**
+```python
+class UserIntent(str, Enum):
+    SAVE_MESSAGE = "save_message"
+    LIST_MESSAGES = "list_messages"
+    LIST_ALL_MESSAGES = "list_all"
+    GET_MESSAGE = "get_message"      # 신규: 특정 메시지 조회
+    CLEAR_MESSAGES = "clear_messages"
+    DELETE_MESSAGE = "delete_message"
+    HELP = "help"
+    QUESTION = "question"
+    COMPLEX = "complex"
+```
+
+**프롬프트 개선:**
+```python
+INTENT_CLASSIFIER_PROMPT = """
+- get_message: 특정 메시지 내용 조회 (예: "1번 메시지 알려줘", "3번 내용 보여줘")
+  [조회 동사: 알려줘, 보여줘, 뭐야, 읽어줘]
+- delete_message: 특정 메시지 삭제 (예: "1번 삭제해줘", "첫번째 거 지워")
+  [삭제 동사: 삭제해줘, 지워줘, 없애줘]
+
+[중요: N번 + 동사 조합 구분]
+- "N번 알려줘/보여줘/뭐야" → get_message (조회)
+- "N번 삭제해줘/지워줘" → delete_message (삭제)
+"""
+```
+
+### 교훈
+- 의도 분류는 **동사(행위)**를 기준으로 구분해야 함
+- 숫자 패턴만으로 의도를 추론하면 오분류 발생
+- 새로운 기능(조회)이 필요하면 의도를 추가해야 함
+
+---
+
+## 14. 포괄적 의도 시스템 설계 (Future-Proof)
+
+### 배경
+현재 기능뿐 아니라 향후 기능을 고려하여 의도 시스템을 재설계.
+
+### 현재 기능 기반 의도 분류
+
+| 카테고리 | 의도 | 설명 |
+|----------|------|------|
+| **메시지 CRUD** | save_message | 메시지 저장 |
+| | list_messages | 최근 메시지 목록 |
+| | list_all | 전체 메시지 목록 |
+| | get_message | 특정 메시지 조회 |
+| | delete_message | 특정 메시지 삭제 |
+| | clear_messages | 전체 메시지 삭제 |
+| **검색** | web_search | 웹 검색 (명시적 요청) |
+| | x_search | X 검색 (명시적 요청) |
+| **AI 처리** | question | 단순 질문/분석 |
+| | complex | 복합 작업 |
+| **시스템** | help | 도움말 |
+
+### 향후 기능을 고려한 의도 확장
+
+**1. 채널 구독 및 콘텐츠 수집**
+```
+- subscribe: 채널/키워드 구독 ("@elonmusk 구독해줘", "비트코인 뉴스 알려줘")
+- unsubscribe: 구독 취소 ("@elonmusk 구독 취소")
+- list_subscriptions: 구독 목록 조회 ("뭐 구독하고 있어?")
+- get_feed: 구독 피드 조회 ("오늘 뭐 올라왔어?")
+```
+
+**2. 사용자 기억 (Memory)**
+```
+- remember_preference: 선호도 저장 ("내가 좋아하는 색은 파란색이야")
+- recall_preference: 선호도 조회 ("내가 뭐 좋아한다고 했지?")
+- forget_preference: 선호도 삭제 ("내 선호도 지워줘")
+```
+
+**3. 페르소나 (Persona)**
+```
+- set_persona: 페르소나 설정 ("피터 린치처럼 대답해줘")
+- get_persona: 현재 페르소나 확인 ("지금 어떤 페르소나야?")
+- reset_persona: 기본 페르소나로 복귀 ("원래대로 돌아가줘")
+```
+
+**4. 외부 서비스 연동**
+```
+- export_to_notion: 노션 내보내기 ("이거 노션에 저장해줘")
+- sync_calendar: 캘린더 동기화 ("내일 일정 뭐야?")
+```
+
+### 설계 원칙
+
+**1. 동사 기반 분류**
+- 조회: 알려줘, 보여줘, 뭐야 → get_* 계열
+- 삭제: 삭제해줘, 지워줘, 없애줘 → delete_*, clear_* 계열
+- 저장: 저장해줘, 기억해줘, 메모해줘 → save_*, remember_* 계열
+- 설정: ~로 해줘, ~처럼 해줘 → set_* 계열
+
+**2. 명사 기반 대상 구분**
+- 메시지 → message 계열
+- 구독 → subscription 계열
+- 기억/선호도 → preference 계열
+- 페르소나 → persona 계열
+
+**3. 계층적 폴백**
+```
+사용자 요청
+    ↓
+[1차] 정확한 의도 매칭 (get_message, save_message 등)
+    ↓ (매칭 실패)
+[2차] 카테고리 폴백 (question → AI Agent로 처리)
+    ↓ (복합 요청)
+[3차] complex → Task Planner
+```
+
+### 구현 우선순위
+
+| 단계 | 의도 | 이유 |
+|------|------|------|
+| Phase 1 (현재) | get_message 추가 | 즉각적인 버그 수정 |
+| Phase 2 | web_search, x_search 분리 | 명시적 검색 요청 구분 |
+| Phase 3 | subscribe, feed 계열 | 채널 구독 기능 |
+| Phase 4 | persona 계열 | 페르소나 기능 |
+| Phase 5 | export 계열 | 외부 서비스 연동 |
+
+---
+
 ## 향후 개선 계획
 
 - [x] **복합 의도 처리 시스템 도입** (9번에서 해결)
 - [x] **Task Planner 세부 조건 처리 개선** (3계층 동기화로 해결)
 - [x] **상세 로깅 시스템** (11번에서 해결)
 - [x] **변수 참조 버그 수정** (12번에서 해결)
+- [x] **get_message 의도 추가** (13번에서 해결)
 - [ ] 대화 히스토리 기반 멀티턴 대화
 - [ ] PDF/이미지 파일 분석
 - [ ] 예약 알림 기능
 - [ ] 금융 데이터 연동 (주가, 환율)
+- [ ] 채널 구독 및 콘텐츠 수집 기능
+- [ ] 사용자 기억 (Memory/RAG) 시스템
+- [ ] 페르소나 기능
+- [ ] 외부 서비스 연동 (Notion 등)

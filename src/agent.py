@@ -18,6 +18,7 @@ class UserIntent(str, Enum):
     SAVE_MESSAGE = "save_message"        # 메시지 저장
     LIST_MESSAGES = "list_messages"      # 저장된 메시지 목록 보기
     LIST_ALL_MESSAGES = "list_all"       # 전체 메시지 보기
+    GET_MESSAGE = "get_message"          # 특정 메시지 내용 조회
     CLEAR_MESSAGES = "clear_messages"    # 메시지 전체 삭제
     DELETE_MESSAGE = "delete_message"    # 특정 메시지 삭제
     HELP = "help"                        # 도움말
@@ -32,12 +33,20 @@ INTENT_CLASSIFIER_PROMPT = """당신은 사용자 의도를 분류하는 분류�
 - save_message: 단순히 특정 내용만 저장 (예: "'안녕' 저장해줘", "메모해줘: 내일 회의")
 - list_messages: 저장된 메시지 목록 조회 (예: "저장된 거 보여줘", "뭐 저장했지?")
 - list_all: 전체 메시지 모두 보기 (예: "전체 목록", "다 보여줘")
+- get_message: 특정 메시지 내용 조회 (예: "1번 메시지 알려줘", "3번 내용 보여줘", "2번 뭐야?")
+  [조회 동사: 알려줘, 보여줘, 뭐야, 읽어줘, 확인해줘]
 - clear_messages: 저장된 메시지 전부 삭제 (예: "다 지워줘", "초기화")
 - delete_message: 특정 메시지 삭제 (예: "1번 삭제해줘", "첫번째 거 지워")
+  [삭제 동사: 삭제해줘, 지워줘, 없애줘]
 - help: 사용법이나 도움말 (예: "어떻게 써?", "도움말")
 - question: 단순 질문이나 분석 요청 (예: "이거 분석해줘", "날씨 알려줘", "요약해줘")
 - complex: 여러 단계가 연결된 복합 작업 요청
   예: "검색해서 저장해줘", "X에서 찾아서 번역해줘", "뉴스 찾아서 요약해줘"
+
+[중요 - get_message vs delete_message 구분]
+"N번" 또는 "N번째" 패턴이 있을 때 동사로 구분:
+- "N번 알려줘/보여줘/뭐야/읽어줘" → get_message (조회)
+- "N번 삭제해줘/지워줘/없애줘" → delete_message (삭제)
 
 [중요 - complex 판단 기준]
 다음과 같이 2개 이상의 동작이 순서대로 연결된 경우 complex로 분류:
@@ -46,7 +55,7 @@ INTENT_CLASSIFIER_PROMPT = """당신은 사용자 의도를 분류하는 분류�
 - 단일 의도로 마무리되지 않고 여러 의도가 연결되어있는 모든 경우
 
 [중요]
-- 반드시 위 8개 중 하나만 출력하세요.
+- 반드시 위 9개 중 하나만 출력하세요.
 - 다른 설명 없이 의도 이름만 출력하세요.
 - 단일 동작이면 question, 복합 동작이면 complex
 
@@ -89,6 +98,7 @@ async def classify_intent(message: str) -> tuple[UserIntent, Optional[str]]:
             "save_message": UserIntent.SAVE_MESSAGE,
             "list_messages": UserIntent.LIST_MESSAGES,
             "list_all": UserIntent.LIST_ALL_MESSAGES,
+            "get_message": UserIntent.GET_MESSAGE,
             "clear_messages": UserIntent.CLEAR_MESSAGES,
             "delete_message": UserIntent.DELETE_MESSAGE,
             "help": UserIntent.HELP,
@@ -104,7 +114,15 @@ async def classify_intent(message: str) -> tuple[UserIntent, Optional[str]]:
         import re
         arg = None
 
-        if intent == UserIntent.DELETE_MESSAGE:
+        if intent == UserIntent.GET_MESSAGE:
+            print(f"[의도 분류] GET_MESSAGE - 번호 추출 시도")
+            # 조회할 번호 추출
+            numbers = re.findall(r'\d+', message)
+            if numbers:
+                arg = numbers[0]
+                print(f"[의도 분류] 추출된 번호: {arg}")
+
+        elif intent == UserIntent.DELETE_MESSAGE:
             print(f"[의도 분류] DELETE_MESSAGE - 번호 추출 시도")
             # 삭제할 번호 추출
             numbers = re.findall(r'\d+', message)

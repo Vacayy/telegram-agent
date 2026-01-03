@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from telegram import Update
+from telegram import Update, MessageEntity
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -23,6 +23,69 @@ from src.tools.xai_tools import SearchError
 from src.planner import plan_tasks
 from src.executor import TaskExecutor
 from src.database import get_all_messages_as_context
+
+
+# ==================== 헬퍼 함수 ====================
+
+def format_message_list_with_expandable(messages: list, show_all: bool = False) -> tuple[str, list]:
+    """
+    메시지 목록을 ExpandableBlockQuote로 포맷팅
+
+    Args:
+        messages: 메시지 딕셔너리 리스트
+        show_all: True면 전체 목록, False면 최근 10개
+
+    Returns:
+        (텍스트, MessageEntity 리스트) 튜플
+    """
+    if not messages:
+        return "📭 저장된 메시지가 없습니다.", []
+
+    entities = []
+    parts = []
+    current_offset = 0
+
+    # 헤더
+    if show_all:
+        header = f"📋 저장된 메시지 전체 ({len(messages)}개)\n\n"
+    else:
+        header = f"📋 저장된 메시지 (최근 {len(messages)}개)\n\n"
+    parts.append(header)
+    current_offset += len(header)
+
+    for i, msg in enumerate(messages, 1):
+        # 메타 정보 (항상 표시)
+        source = "[포워딩]" if msg["is_forwarded"] else "[직접]"
+        time_str = msg["created_at"][:16] if msg["created_at"] else ""
+        meta_line = f"{i}. {source} ({time_str})\n"
+        parts.append(meta_line)
+        current_offset += len(meta_line)
+
+        # 메시지 내용 (ExpandableBlockQuote로 감싸기)
+        content = msg["content"]
+        # 내용이 긴 경우에만 접기 적용
+        if len(content) > 100:
+            content_with_newline = f"{content}\n\n"
+            entities.append(MessageEntity(
+                type=MessageEntity.EXPANDABLE_BLOCKQUOTE,
+                offset=current_offset,
+                length=len(content_with_newline) - 1  # 마지막 줄바꿈 제외
+            ))
+            parts.append(content_with_newline)
+            current_offset += len(content_with_newline)
+        else:
+            # 짧은 메시지는 그냥 표시
+            content_line = f"{content}\n\n"
+            parts.append(content_line)
+            current_offset += len(content_line)
+
+        # 텔레그램 메시지 길이 제한 대응
+        if current_offset > 3800:
+            remaining = f"... 외 {len(messages) - i}개 더 있음"
+            parts.append(remaining)
+            break
+
+    return "".join(parts), entities
 
 
 # ==================== 명령어 핸들러 ====================
@@ -90,7 +153,7 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/list - 저장된 메시지 목록 (최근 10개)"""
+    """/list - 저장된 메시지 목록 (최근 10개) with ExpandableBlockQuote"""
     user_id = update.effective_user.id
     messages = await get_messages(user_id, limit=10)
 
@@ -98,20 +161,21 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 저장된 메시지가 없습니다.")
         return
 
+    text, entities = format_message_list_with_expandable(messages, show_all=False)
     count = await get_message_count(user_id)
-    response = f"📋 저장된 메시지 | 최근 10개까지 노출됩니다 (Total: {count}))\n\n"
 
-    for i, msg in enumerate(messages, 1):
-        content_preview = msg["content"][:100] + "..." if len(msg["content"]) > 100 else msg["content"]
-        source = "[포워딩]" if msg["is_forwarded"] else "[직접]"
-        time_str = msg["created_at"][:16] if msg["created_at"] else ""
-        response += f"{i}. {source} ({time_str})\n{content_preview}\n\n"
+    # 전체 개수 정보 추가
+    if count > 10:
+        text = text.replace(
+            f"(최근 {len(messages)}개)",
+            f"(최근 {len(messages)}개, 전체 {count}개)"
+        )
 
-    await update.message.reply_text(response)
+    await update.message.reply_text(text, entities=entities)
 
 
 async def listall_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/listall - 저장된 메시지 전체 목록"""
+    """/listall - 저장된 메시지 전체 목록 with ExpandableBlockQuote"""
     user_id = update.effective_user.id
     messages = await get_messages(user_id, limit=1000)
 
@@ -119,20 +183,8 @@ async def listall_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 저장된 메시지가 없습니다.")
         return
 
-    response = f"📋 저장된 메시지 전체 ({len(messages)}개)\n\n"
-
-    for i, msg in enumerate(messages, 1):
-        content_preview = msg["content"][:80] + "..." if len(msg["content"]) > 80 else msg["content"]
-        source = "[포워딩]" if msg["is_forwarded"] else "[직접]"
-        time_str = msg["created_at"][:16] if msg["created_at"] else ""
-        response += f"{i}. {source} ({time_str})\n{content_preview}\n\n"
-
-        # 텔레그램 메시지 길이 제한 (4096자) 대응
-        if len(response) > 3800:
-            response += f"... 외 {len(messages) - i}개 더 있음"
-            break
-
-    await update.message.reply_text(response)
+    text, entities = format_message_list_with_expandable(messages, show_all=True)
+    await update.message.reply_text(text, entities=entities)
 
 
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -246,9 +298,62 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
     intent, arg = await classify_intent(user_message)
     print(f"[Bot] 의도 분류 완료: intent={intent.value}, arg={arg}")
 
+    # 답글(reply) 대상 메시지 확인
+    reply_message = update.message.reply_to_message
+    reply_content = None
+    reply_forward_from = None
+
+    if reply_message:
+        # 답글 대상 메시지가 있으면 해당 내용 추출
+        reply_content = reply_message.text or reply_message.caption
+        print(f"[Bot] 답글 대상 메시지 발견: {len(reply_content) if reply_content else 0}자")
+
+        # forward_origin으로 포워딩 출처 확인 (python-telegram-bot 20.1+)
+        forward_origin = getattr(reply_message, 'forward_origin', None)
+        if forward_origin:
+            print(f"[Bot] forward_origin 타입: {type(forward_origin).__name__}")
+            # MessageOriginUser, MessageOriginChat, MessageOriginChannel, MessageOriginHiddenUser
+            if hasattr(forward_origin, 'sender_user') and forward_origin.sender_user:
+                reply_forward_from = forward_origin.sender_user.full_name
+            elif hasattr(forward_origin, 'chat') and forward_origin.chat:
+                reply_forward_from = forward_origin.chat.title or forward_origin.chat.username
+            elif hasattr(forward_origin, 'sender_user_name'):
+                reply_forward_from = forward_origin.sender_user_name
+            print(f"[Bot] 포워딩 출처: {reply_forward_from}")
+
     # 의도별 처리
     if intent == UserIntent.SAVE_MESSAGE:
         print(f"[Bot] SAVE_MESSAGE 처리 시작")
+
+        # Case 1: 답글로 "저장해줘"라고 한 경우 → 답글 대상 메시지 저장
+        if reply_content:
+            print(f"[Bot] 답글 대상 메시지 저장")
+            is_forwarded = reply_forward_from is not None
+            await save_message(
+                user_id=user_id,
+                content=reply_content,
+                is_forwarded=is_forwarded,
+                forward_from=reply_forward_from
+            )
+            source_text = f" (출처: {reply_forward_from})" if reply_forward_from else ""
+            content_preview = reply_content[:100] + "..." if len(reply_content) > 100 else reply_content
+            await update.message.reply_text(f"✅ 메시지가 저장되었습니다{source_text}\n\n저장된 내용: {content_preview}")
+            return
+
+        # Case 2: 지시어("이거", "방금 거" 등) 감지 → 안내 메시지
+        import re
+        pronoun_patterns = [r'^이거$', r'^이\s*메시지$', r'^방금\s*거$', r'^위\s*메시지$', r'^저거$']
+        if arg and any(re.match(p, arg.strip(), re.IGNORECASE) for p in pronoun_patterns):
+            print(f"[Bot] 지시어 감지: '{arg}'")
+            await update.message.reply_text(
+                "💡 저장하려는 메시지에 **답글**로 '저장해줘'라고 입력해주세요.\n\n"
+                "또는 저장할 내용을 직접 입력해주세요:\n"
+                "예: '오늘 회의 내용' 저장해줘",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Case 3: 실제 저장할 내용이 있는 경우
         if not arg:
             print(f"[Bot] 저장할 내용 없음")
             await update.message.reply_text("❓ 저장할 내용을 입력해주세요.\n예: '안녕하세요' 저장해줘")
@@ -263,14 +368,14 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
         if not messages:
             await update.message.reply_text("📭 저장된 메시지가 없습니다.")
             return
+        text, entities = format_message_list_with_expandable(messages, show_all=False)
         count = await get_message_count(user_id)
-        response = f"📋 저장된 메시지 | 최근 10개까지 노출됩니다 (Total: {count}))\n\n"
-        for i, msg in enumerate(messages, 1):
-            content_preview = msg["content"][:100] + "..." if len(msg["content"]) > 100 else msg["content"]
-            source = "[포워딩]" if msg["is_forwarded"] else "[직접]"
-            time_str = msg["created_at"][:16] if msg["created_at"] else ""
-            response += f"{i}. {source} ({time_str})\n{content_preview}\n\n"
-        await update.message.reply_text(response)
+        if count > 10:
+            text = text.replace(
+                f"(최근 {len(messages)}개)",
+                f"(최근 {len(messages)}개, 전체 {count}개)"
+            )
+        await update.message.reply_text(text, entities=entities)
         return
 
     if intent == UserIntent.LIST_ALL_MESSAGES:
@@ -278,16 +383,8 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
         if not messages:
             await update.message.reply_text("📭 저장된 메시지가 없습니다.")
             return
-        response = f"📋 저장된 메시지 전체 ({len(messages)}개)\n\n"
-        for i, msg in enumerate(messages, 1):
-            content_preview = msg["content"][:80] + "..." if len(msg["content"]) > 80 else msg["content"]
-            source = "[포워딩]" if msg["is_forwarded"] else "[직접]"
-            time_str = msg["created_at"][:16] if msg["created_at"] else ""
-            response += f"{i}. {source} ({time_str})\n{content_preview}\n\n"
-            if len(response) > 3800:
-                response += f"... 외 {len(messages) - i}개 더 있음"
-                break
-        await update.message.reply_text(response)
+        text, entities = format_message_list_with_expandable(messages, show_all=True)
+        await update.message.reply_text(text, entities=entities)
         return
 
     if intent == UserIntent.GET_MESSAGE:

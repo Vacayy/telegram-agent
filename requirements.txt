@@ -1,5 +1,5 @@
 # Telegram Bot
-python-telegram-bot>=20.0
+python-telegram-bot>=21.3  # ExpandableBlockQuote 지원
 
 # LangChain & AI
 langchain>=0.1.0

@@ -1,11 +1,12 @@
-"""Task Executor - 계획된 작업을 순차 실행"""
+"""Task Executor - 계획된 작업을 순차 실행
+
+Registry를 통해 도구를 실행하여 Provider 추상화 및 Fallback을 지원합니다.
+"""
 
 import json
 from typing import Any, Callable, Coroutine, Optional
 
-from src.tools.xai_tools import search_web, search_x
-from src.tools.llm import translate, summarize, analyze
-from src.database import save_message
+from src.registry import get_registry
 
 
 # 작업별 상태 메시지 템플릿
@@ -52,6 +53,10 @@ class TaskExecutor:
         print(f"[Executor] user_id: {self.user_id}")
         print(f"[Executor] 총 단계 수: {len(steps)}")
         print(f"[Executor] summary: '{summary}'")
+
+        # Registry에 user_id 설정 (save_message에서 사용)
+        registry = get_registry()
+        registry.set_user_id(self.user_id)
 
         if not steps:
             print(f"[Executor] 실행할 작업 없음")
@@ -175,7 +180,7 @@ class TaskExecutor:
                 print(f"[Executor] 상태 업데이트 실패: {e}")
 
     async def _execute_action(self, action: str, params: dict) -> str:
-        """개별 작업 실행
+        """개별 작업 실행 (Registry 사용)
 
         Args:
             action: 작업 이름
@@ -187,50 +192,15 @@ class TaskExecutor:
         Raises:
             ValueError: 알 수 없는 작업인 경우
         """
-        if action == "web_search":
-            query = params.get("query", "")
-            count = params.get("count")
-            print(f"[Executor] web_search 호출: query='{query}', count={count}")
-            return await search_web(query=query, count=count)
+        registry = get_registry()
 
-        elif action == "x_search":
-            query = params.get("query", "")
-            count = params.get("count")
-            print(f"[Executor] x_search 호출: query='{query}', count={count}")
-            return await search_x(query=query, count=count)
+        # 파라미터 로깅
+        param_preview = {k: (f"{v[:50]}..." if isinstance(v, str) and len(v) > 50 else v)
+                         for k, v in params.items()}
+        print(f"[Executor] {action} 호출 (via Registry): {param_preview}")
 
-        elif action == "translate":
-            text = params.get("text", "")
-            to_lang = params.get("to", "ko")
-            print(f"[Executor] translate 호출: to='{to_lang}', text길이={len(text)}자")
-            return await translate(text=text, to=to_lang)
-
-        elif action == "summarize":
-            text = params.get("text", "")
-            language = params.get("language", "same")
-            print(f"[Executor] summarize 호출: language='{language}', text길이={len(text)}자")
-            return await summarize(text=text, language=language)
-
-        elif action == "analyze":
-            text = params.get("text", "")
-            question = params.get("question")
-            print(f"[Executor] analyze 호출: question='{question}', text길이={len(text)}자")
-            return await analyze(text=text, question=question)
-
-        elif action == "save_message":
-            content = params.get("content", "")
-            print(f"[Executor] save_message 호출: content길이={len(content)}자")
-            await save_message(
-                user_id=self.user_id,
-                content=content,
-                is_forwarded=False
-            )
-            print(f"[Executor] DB 저장 완료")
-            return f"저장 완료: {content[:50]}..." if len(content) > 50 else f"저장 완료: {content}"
-
-        else:
-            print(f"[Executor] 알 수 없는 action: {action}")
-            raise ValueError(f"알 수 없는 작업: {action}")
+        # Registry를 통해 실행
+        return await registry.execute(action, params)
 
     def _format_final_result(self, results: list[dict], summary: str) -> str:
         """최종 결과 메시지 포맷팅

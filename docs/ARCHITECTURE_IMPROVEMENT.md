@@ -361,34 +361,35 @@ src/
 
 ## 구현 로드맵
 
-### Phase 1: Task Planner (우선)
+### Phase 1: Task Planner ✅ 완료
 
-| 작업 | 예상 |
+| 작업 | 상태 |
 |------|------|
-| intent.py 분리 (단순/복합 구분) | - |
-| planner.py 구현 | - |
-| executor.py 기본 구현 | - |
-| bot.py 리팩토링 | - |
+| intent.py 분리 (단순/복합 구분) | ✅ |
+| planner.py 구현 | ✅ |
+| executor.py 기본 구현 | ✅ |
+| bot.py 리팩토링 | ✅ |
 
-**목표**: 복합 의도 처리 가능
+**결과**: 복합 의도 ("검색해서 번역 후 저장") 처리 가능
 
-### Phase 2: Tool Registry
+### Phase 2: Tool Registry ✅ 완료
 
-| 작업 | 예상 |
+| 작업 | 상태 |
 |------|------|
-| registry.py 구현 | - |
-| 기존 도구 마이그레이션 | - |
-| fallback 로직 구현 | - |
+| registry.py 구현 | ✅ |
+| 기존 도구 마이그레이션 | ✅ |
+| fallback 로직 구현 | ✅ |
+| executor.py Registry 연동 | ✅ |
 
-**목표**: AI provider 교체 용이
+**결과**: Provider 추상화, Fallback 지원, 비용 추적 기반 마련
 
-### Phase 3: 비용 최적화
+### Phase 3: 비용 최적화 (향후)
 
-| 작업 | 예상 |
+| 작업 | 상태 |
 |------|------|
-| optimizer.py 구현 | - |
-| 사용량 추적 | - |
-| 예산 알림 | - |
+| optimizer.py 구현 | 미정 |
+| 사용량 추적 | ✅ (Registry에 기본 구현) |
+| 예산 알림 | 미정 |
 
 **목표**: 월 비용 예측 및 제어
 

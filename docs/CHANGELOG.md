@@ -1207,6 +1207,96 @@ await update.message.reply_text(text, entities=entities)
 
 ---
 
+## 17. Tool Registry 도입 (코드 구조 개선)
+
+### 문제
+Executor가 도구들을 직접 호출하는 if-elif 체인 방식으로 구현됨.
+
+```python
+# 기존 executor.py
+async def _execute_action(self, action: str, params: dict):
+    if action == "web_search":
+        return await search_web(query=params.get("query"))
+    elif action == "x_search":
+        return await search_x(query=params.get("query"))
+    elif action == "translate":
+        return await translate(text=params.get("text"))
+    # ... if-elif 계속 증가
+```
+
+**문제점**:
+- Provider 교체 시 코드 여러 곳 수정 필요
+- API 장애 시 Fallback 불가 → 서비스 중단
+- 비용 추적 불가
+- 새 도구 추가 시 executor.py 수정 필요
+
+### 해결
+**Tool Registry 패턴 도입** (`src/registry.py`)
+
+```python
+# 도구 등록 (토큰 기반 비용 추적)
+registry.register(
+    action="web_search",
+    provider="xai",
+    handler=search_web,
+    fallback="tavily",         # 장애 시 대체 Provider
+    input_cost_per_1m=0.20,    # 입력 토큰 100만개당 $0.20
+    output_cost_per_1m=0.50,   # 출력 토큰 100만개당 $0.50
+    cost_per_call=0.0          # 호출당 비용 (현재 프로모션 무료)
+)
+
+# 도구 실행 (Executor에서)
+result = await registry.execute("web_search", {"query": "비트코인"})
+# Registry가 Provider 선택, Fallback, 비용 추적 담당
+```
+
+### 구조 변경
+```
+Before:
+  executor.py → xai_tools.py (직접 호출)
+              → llm.py (직접 호출)
+
+After:
+  executor.py → registry.py → xai_tools.py
+                             → llm.py
+                             → (향후 tavily.py 등)
+```
+
+### 적용 파일
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/registry.py` | 신규 - ToolRegistry 클래스, 도구 등록 로직 |
+| `src/executor.py` | _execute_action()이 Registry 사용하도록 변경 |
+| `docs/TOOL_REGISTRY.md` | 신규 - 도입 배경 및 효과 문서 |
+
+### 효과
+| 항목 | Before | After |
+|------|--------|-------|
+| Provider 교체 | 코드 수정 필요 | `set_default_provider()` 1줄 |
+| API 장애 대응 | 서비스 중단 | 자동 Fallback |
+| 비용 추적 | 불가 | `get_usage_report()` (토큰 기반) |
+| 새 도구 추가 | executor.py 수정 | `registry.register()` 1줄 |
+| 테스트 | 실제 API 호출 | Mock Provider 가능 |
+
+### 비용 추적 (토큰 기반)
+```python
+report = registry.get_usage_report()
+# {
+#     "by_action": {"web_search": {"calls": 5, "input_tokens": 500, "output_tokens": 2000, "cost": 0.001}},
+#     "by_provider": {"xai": {...}, "gemini": {...}},
+#     "total_tokens": {"input": 1500, "output": 2800},
+#     "total_cost": 0.001
+# }
+```
+
+### 향후 확장
+- Tavily 검색 Provider 추가 (Grok Fallback)
+- 환경변수로 기본 Provider 설정
+- 월간 비용 리포트 기능
+- `/usage` 명령어로 사용량 조회
+
+---
+
 ## 향후 개선 계획
 
 - [x] **복합 의도 처리 시스템 도입** (9번에서 해결)
@@ -1215,6 +1305,7 @@ await update.message.reply_text(text, entities=entities)
 - [x] **변수 참조 버그 수정** (12번에서 해결)
 - [x] **get_message 의도 추가** (13번에서 해결)
 - [x] **답글 기반 메시지 저장** (15번에서 해결)
+- [x] **Tool Registry 도입** (17번에서 해결)
 - [ ] 대화 히스토리 기반 멀티턴 대화
 - [ ] PDF/이미지 파일 분석
 - [ ] 예약 알림 기능

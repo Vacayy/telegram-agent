@@ -24,6 +24,7 @@ from src.planner import plan_tasks
 from src.executor import TaskExecutor
 from src.database import get_all_messages_as_context
 from src.registry import get_registry
+from src.debate import DebateOrchestrator, format_debate_report
 
 
 # ==================== 헬퍼 함수 ====================
@@ -163,6 +164,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /search <검색어> - 웹 검색
 /x <검색어> - X(트위터) 검색
 /usage - API 사용량 조회
+/debate <주제> - AI 토론
 """
     await update.message.reply_text(welcome_message, parse_mode="Markdown")
 
@@ -181,6 +183,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /search <검색어> - 웹 검색
 /x <검색어> - X(트위터) 검색
 /usage - API 사용량 조회
+/debate <주제> - AI 토론 (3명의 전문가가 5라운드 토론)
 
 💬 **일반 메시지**
 명령어 없이 메시지를 보내면:
@@ -308,6 +311,67 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/usage - 현재 세션 사용량 조회"""
     report_text = format_usage_report()
     await update.message.reply_text(report_text, parse_mode="Markdown")
+
+
+async def debate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/debate <주제> - AI 토론 시작"""
+    if not context.args:
+        await update.message.reply_text(
+            "🎭 **AI Debate** - 다각도 토론을 통한 심층 분석\n\n"
+            "사용법: `/debate <토론 주제>`\n\n"
+            "예시:\n"
+            "• `/debate 비트코인 10만달러 갈까?`\n"
+            "• `/debate 2026년 반도체 시장 전망`\n"
+            "• `/debate 재택근무 vs 출근, 뭐가 나을까?`\n\n"
+            "3명의 AI 전문가가 5라운드에 걸쳐 토론을 진행합니다.",
+            parse_mode="Markdown"
+        )
+        return
+
+    query = " ".join(context.args)
+    status_msg = await update.message.reply_text("🎭 AI Debate 준비 중...")
+
+    async def update_status(message: str, entities: list = None):
+        """상태 메시지 업데이트 (기존 메시지 edit, 접힘 entity 지원)"""
+        try:
+            # 텔레그램 메시지 길이 제한 대응
+            if len(message) > 4000:
+                message = message[:4000] + "\n\n... (내용 생략)"
+                # entity 범위 조정
+                if entities:
+                    entities = [e for e in entities if e.offset + e.length <= 4000]
+            await status_msg.edit_text(message, entities=entities or None)
+        except Exception as e:
+            print(f"[Debate] 상태 업데이트 실패: {e}")
+
+    try:
+        orchestrator = DebateOrchestrator()
+        report = await orchestrator.start_debate(
+            query=query,
+            status_callback=update_status,
+            use_dynamic_personas=True
+        )
+
+        # 최종 리포트 포맷
+        final_report = format_debate_report(report)
+
+        # 모든 라운드 + 최종 리포트를 하나의 메시지에 표시
+        final_text, final_entities = orchestrator.format_final_message_with_report(final_report)
+
+        # 길이 제한 대응
+        if len(final_text) > 4000:
+            final_text = final_text[:4000] + "\n\n... (내용 생략)"
+            final_entities = [e for e in final_entities if e.offset + e.length <= 4000]
+
+        await status_msg.edit_text(final_text, entities=final_entities if final_entities else None)
+
+        print(f"[Debate] 토론 완료: {report.duration_seconds:.1f}초, {report.total_statements}개 발언")
+
+    except Exception as e:
+        print(f"[Debate] 오류: {type(e).__name__}: {e}")
+        import traceback
+        print(f"[Debate] 스택 트레이스:\n{traceback.format_exc()}")
+        await status_msg.edit_text(f"❌ 토론 진행 실패\n\n{str(e)}")
 
 
 # ==================== 메시지 핸들러 ====================
@@ -617,6 +681,7 @@ def create_bot_application() -> Application:
     application.add_handler(CommandHandler("search", search_command))
     application.add_handler(CommandHandler("x", x_search_command))
     application.add_handler(CommandHandler("usage", usage_command))
+    application.add_handler(CommandHandler("debate", debate_command))
 
     # 포워딩된 메시지 핸들러 (일반 메시지보다 먼저 체크)
     application.add_handler(

@@ -23,6 +23,7 @@ from src.tools.xai_tools import SearchError
 from src.planner import plan_tasks
 from src.executor import TaskExecutor
 from src.database import get_all_messages_as_context
+from src.registry import get_registry
 
 
 # ==================== 헬퍼 함수 ====================
@@ -88,6 +89,54 @@ def format_message_list_with_expandable(messages: list, show_all: bool = False) 
     return "".join(parts), entities
 
 
+def format_usage_report() -> str:
+    """사용량 리포트를 텍스트로 포맷팅"""
+    registry = get_registry()
+    report = registry.get_usage_report()
+
+    if report["total_calls"] == 0:
+        return "📊 **사용량 리포트**\n\n아직 사용 기록이 없습니다.\n\n(봇 재시작 시 초기화됨)"
+
+    lines = ["📊 **사용량 리포트** (현재 세션)\n"]
+
+    # 도구별 사용량
+    if report["by_action"]:
+        lines.append("**도구별 사용량**")
+        for action, stats in report["by_action"].items():
+            calls = stats["calls"]
+            input_tokens = stats["input_tokens"]
+            output_tokens = stats["output_tokens"]
+            cost = stats["cost"]
+            success_rate = stats.get("success_rate", 1.0) * 100
+            lines.append(f"• {action}: {calls}회 ({input_tokens:,} in / {output_tokens:,} out) ${cost:.4f}")
+        lines.append("")
+
+    # Provider별 사용량
+    if report["by_provider"]:
+        lines.append("**Provider별 사용량**")
+        for provider, stats in report["by_provider"].items():
+            calls = stats["calls"]
+            cost = stats["cost"]
+            lines.append(f"• {provider}: {calls}회, ${cost:.4f}")
+        lines.append("")
+
+    # 총계
+    total_input = report["total_tokens"]["input"]
+    total_output = report["total_tokens"]["output"]
+    total_cost = report["total_cost"]
+    success_rate = report["success_rate"] * 100
+
+    lines.append("**총계**")
+    lines.append(f"• 총 호출: {report['total_calls']}회")
+    lines.append(f"• 총 토큰: {total_input:,} in / {total_output:,} out")
+    lines.append(f"• 총 비용: ${total_cost:.4f}")
+    lines.append(f"• 성공률: {success_rate:.1f}%")
+    lines.append("")
+    lines.append("_※ 봇 재시작 시 초기화됨_")
+
+    return "\n".join(lines)
+
+
 # ==================== 명령어 핸들러 ====================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -113,6 +162,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /clear - 저장된 메시지 전체 삭제
 /search <검색어> - 웹 검색
 /x <검색어> - X(트위터) 검색
+/usage - API 사용량 조회
 """
     await update.message.reply_text(welcome_message, parse_mode="Markdown")
 
@@ -130,6 +180,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /clear - 저장된 메시지 전체 삭제
 /search <검색어> - 웹 검색
 /x <검색어> - X(트위터) 검색
+/usage - API 사용량 조회
 
 💬 **일반 메시지**
 명령어 없이 메시지를 보내면:
@@ -251,6 +302,12 @@ async def x_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text(f"🐦 X 검색 결과 ({search_time})\n\n{result}")
     except SearchError as e:
         await status_msg.edit_text(f"❌ X 검색 실패\n\n{str(e)}")
+
+
+async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/usage - 현재 세션 사용량 조회"""
+    report_text = format_usage_report()
+    await update.message.reply_text(report_text, parse_mode="Markdown")
 
 
 # ==================== 메시지 핸들러 ====================
@@ -458,10 +515,17 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
 /clear - 저장된 메시지 전체 삭제
 /search <검색어> - 웹 검색
 /x <검색어> - X(트위터) 검색
+/usage - API 사용량 조회
 
 포워딩된 메시지는 자동 저장됩니다.
 일반 질문은 AI가 답변합니다."""
         await update.message.reply_text(help_message)
+        return
+
+    if intent == UserIntent.USAGE:
+        print(f"[Bot] USAGE 처리")
+        report_text = format_usage_report()
+        await update.message.reply_text(report_text, parse_mode="Markdown")
         return
 
     # COMPLEX: 복합 작업 처리 (Task Planner + Executor)
@@ -552,6 +616,7 @@ def create_bot_application() -> Application:
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("search", search_command))
     application.add_handler(CommandHandler("x", x_search_command))
+    application.add_handler(CommandHandler("usage", usage_command))
 
     # 포워딩된 메시지 핸들러 (일반 메시지보다 먼저 체크)
     application.add_handler(

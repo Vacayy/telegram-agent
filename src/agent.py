@@ -22,6 +22,7 @@ class UserIntent(str, Enum):
     CLEAR_MESSAGES = "clear_messages"    # 메시지 전체 삭제
     DELETE_MESSAGE = "delete_message"    # 특정 메시지 삭제
     HELP = "help"                        # 도움말
+    USAGE = "usage"                      # 사용량 조회
     QUESTION = "question"                # 일반 질문 (AI Agent 필요)
     COMPLEX = "complex"                  # 복합 작업 (Task Planner 필요)
 
@@ -39,6 +40,7 @@ INTENT_CLASSIFIER_PROMPT = """당신은 사용자 의도를 분류하는 분류�
 - delete_message: 특정 메시지 삭제 (예: "1번 삭제해줘", "첫번째 거 지워")
   [삭제 동사: 삭제해줘, 지워줘, 없애줘]
 - help: 사용법이나 도움말 (예: "어떻게 써?", "도움말")
+- usage: 사용량/비용 조회 (예: "사용량 알려줘", "얼마나 썼어?", "비용 확인", "API 사용량")
 - question: 단순 질문이나 분석 요청 (예: "이거 분석해줘", "날씨 알려줘", "요약해줘")
 - complex: 여러 단계가 연결된 복합 작업 요청
   예: "검색해서 저장해줘", "X에서 찾아서 번역해줘", "뉴스 찾아서 요약해줘"
@@ -55,7 +57,7 @@ INTENT_CLASSIFIER_PROMPT = """당신은 사용자 의도를 분류하는 분류�
 - 단일 의도로 마무리되지 않고 여러 의도가 연결되어있는 모든 경우
 
 [중요]
-- 반드시 위 9개 중 하나만 출력하세요.
+- 반드시 위 10개 중 하나만 출력하세요.
 - 다른 설명 없이 의도 이름만 출력하세요.
 - 단일 동작이면 question, 복합 동작이면 complex
 
@@ -102,6 +104,7 @@ async def classify_intent(message: str) -> tuple[UserIntent, Optional[str]]:
             "clear_messages": UserIntent.CLEAR_MESSAGES,
             "delete_message": UserIntent.DELETE_MESSAGE,
             "help": UserIntent.HELP,
+            "usage": UserIntent.USAGE,
             "question": UserIntent.QUESTION,
             "complex": UserIntent.COMPLEX,
         }

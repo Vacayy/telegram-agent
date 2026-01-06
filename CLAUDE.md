@@ -62,6 +62,7 @@ GOOGLE_AI_API_KEY=xxx     # Google AI Studio에서 발급
 | `src/tools/xai_tools.py` | xAI Grok API 호출 (web_search, x_search) |
 | `src/tools/llm.py` | Gemini 기반 도구 (translate, summarize, analyze) |
 | `src/debate/` | AI 토론 기능 (3명 페르소나, 5라운드) |
+| `src/memory.py` | Session Memory - 대화 맥락 유지 (슬라이딩 윈도우 + TTL) |
 
 ### 의도 분류 (UserIntent)
 
@@ -122,6 +123,34 @@ messages (id, user_id, content, is_forwarded, forward_from, created_at)
 | `/x <검색어>` | X 검색 |
 | `/usage` | API 사용량 |
 | `/debate <주제>` | AI 토론 |
+
+## Session Memory (대화 맥락 유지)
+
+`src/memory.py`가 사용자별 대화 히스토리를 인메모리로 관리:
+
+```python
+# 설정값
+max_messages = 10      # 세션당 최대 메시지 수 (슬라이딩 윈도우)
+ttl_seconds = 1800     # 30분 후 세션 만료
+```
+
+**동작 방식**:
+1. QUESTION 의도 처리 시 사용자 메시지/AI 응답을 세션에 저장
+2. `get_ai_response()` 호출 시 `chat_history`에 세션 히스토리 주입
+3. LLM이 이전 대화 맥락을 참조하여 응답
+
+**예시**:
+```
+사용자: 비트코인 가격 알려줘
+봇: 비트코인은 현재 $95,000입니다.
+
+사용자: 그거 왜 올랐어?
+봇: 비트코인이 오른 이유는... (맥락 유지!)
+```
+
+**제한사항**:
+- 봇 재시작 시 세션 초기화 (영속성 없음)
+- 인메모리 저장 (Redis 등 외부 의존성 없음)
 
 ## 주의사항
 

@@ -25,6 +25,7 @@ from src.executor import TaskExecutor
 from src.database import get_all_messages_as_context
 from src.registry import get_registry
 from src.debate import DebateOrchestrator, format_debate_report
+from src.memory import get_session_memory
 
 
 # ==================== 헬퍼 함수 ====================
@@ -653,8 +654,18 @@ async def handle_regular_message(update: Update, context: ContextTypes.DEFAULT_T
             print(f"[Bot] 상태 업데이트 실패: {e}")
 
     try:
+        # 세션 메모리에 사용자 메시지 기록
+        memory = get_session_memory()
+        await memory.add(user_id, "human", user_message)
+        print(f"[Bot] 세션에 사용자 메시지 기록")
+
         response = await get_ai_response(user_id, user_message, update_status)
         print(f"[Bot] AI Agent 응답 수신: {len(response)}자")
+
+        # 세션 메모리에 AI 응답 기록
+        await memory.add(user_id, "ai", response)
+        print(f"[Bot] 세션에 AI 응답 기록")
+
         await status_msg.edit_text(response)
         print(f"[Bot] 응답 전송 완료")
     except Exception as e:

@@ -11,6 +11,7 @@ import config
 from src.tools import get_tools
 from src.tools.xai_tools import search_web, search_x
 from src.database import get_all_messages_as_context
+from src.memory import get_session_memory
 
 
 class UserIntent(str, Enum):
@@ -365,6 +366,11 @@ async def get_ai_response(
         tool_callback = ToolStatusCallback(status_callback)
         print(f"[AI 응답] ToolStatusCallback 생성됨")
 
+        # 세션 메모리에서 대화 히스토리 가져오기
+        memory = get_session_memory()
+        chat_history = await memory.get_history(user_id)
+        print(f"[AI 응답] 세션 히스토리 로드: {len(chat_history)}개 메시지")
+
         # Agent 생성 및 실행
         agent_executor = create_agent()
 
@@ -373,7 +379,7 @@ async def get_ai_response(
             {
                 "input": user_message,
                 "context": context,
-                "chat_history": []
+                "chat_history": chat_history
             },
             config={"callbacks": [tool_callback]}
         )

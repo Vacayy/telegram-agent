@@ -1475,6 +1475,133 @@ Provider별 사용량
 
 ---
 
+## 20. Session Memory - 대화 맥락 유지
+
+### 문제
+AI가 이전 대화 내용을 전혀 기억하지 못함. "그거 뭐야?", "더 자세히 알려줘" 같은 맥락 참조 질문에 응답 불가.
+
+### 문제 상황
+```
+사용자: 비트코인 가격 알려줘
+봇: 비트코인은 현재 $95,000입니다.
+
+사용자: 그거 왜 올랐어?
+봇: 무엇에 대해 물어보시는 건가요? ← 맥락 없음!
+```
+
+### 원인 분석
+
+**코드에서의 문제점 (src/agent.py:376)**
+```python
+result = await agent_executor.ainvoke(
+    {
+        "input": user_message,
+        "context": context,         # 저장된 메시지 (장기 기억)
+        "chat_history": []          # ← 항상 빈 배열 (단기 기억 없음)
+    },
+    ...
+)
+```
+
+`chat_history`가 항상 빈 배열이라 LLM은 이전 대화를 전혀 모름.
+
+### 리서치: Agent 메모리 시스템
+
+메모리 유형에 대한 조사 결과, AI Agent의 메모리는 4가지로 분류됨:
+
+| 유형 | 용도 | 예시 |
+|------|------|------|
+| **Short-term** | 현재 대화 흐름 유지 | "그거 뭐야?", "더 자세히" |
+| **Long-term** | 사용자 맞춤화 | "전에 말했듯이...", "매번 한글로 해줘" |
+| **Episodic** | 과거 참조 | "지난주에 비트코인 얘기했을 때..." |
+| **External** | 실시간 정보 | 웹 검색, DB 조회, 문서 RAG |
+
+**현재 프로젝트 상태**
+- Short-term: ❌ 미구현
+- Long-term: ⚠️ 부분 구현 (messages 테이블)
+- Episodic: ❌ 미구현
+- External: ✅ 구현됨 (web_search, x_search)
+
+**우선순위**: Short-term(세션 메모리)가 가장 ROI 높음 → 이번에 구현
+
+### 해결
+
+**Session Memory 클래스 도입 (src/memory.py)**
+
+```python
+class SessionMemory:
+    """인메모리 세션 관리자"""
+
+    def __init__(
+        self,
+        max_messages: int = 10,      # 세션당 최대 메시지 수
+        ttl_seconds: int = 1800,     # 30분 후 만료
+    ):
+        self._sessions: dict[int, UserSession] = {}
+        self._lock = asyncio.Lock()  # 동시성 보장
+```
+
+**핵심 기능**
+1. **슬라이딩 윈도우**: 최근 10개 메시지만 유지
+2. **TTL**: 30분 후 세션 자동 만료
+3. **LangChain 연동**: `BaseMessage` 형식으로 변환
+
+**적용 파일**
+
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/memory.py` | 신규 - SessionMemory 클래스 |
+| `src/agent.py` | `get_ai_response()`에서 세션 히스토리 주입 |
+| `src/bot.py` | QUESTION 처리 시 메시지/응답 세션에 기록 |
+
+**agent.py 수정**
+```python
+# 세션 메모리에서 대화 히스토리 가져오기
+memory = get_session_memory()
+chat_history = await memory.get_history(user_id)
+
+result = await agent_executor.ainvoke(
+    {
+        "input": user_message,
+        "context": context,
+        "chat_history": chat_history  # ← 세션 히스토리 주입
+    },
+    ...
+)
+```
+
+**bot.py 수정**
+```python
+# QUESTION 의도 처리 시
+memory = get_session_memory()
+await memory.add(user_id, "human", user_message)  # 사용자 메시지 기록
+response = await get_ai_response(user_id, user_message, ...)
+await memory.add(user_id, "ai", response)          # AI 응답 기록
+```
+
+### 성과
+```
+사용자: 비트코인 가격 알려줘
+봇: 비트코인은 현재 $95,000입니다.
+
+사용자: 그거 왜 올랐어?
+봇: 비트코인이 오른 이유는 최근 ETF 승인 기대감과... (맥락 유지!)
+```
+
+- 대화 맥락 유지로 자연스러운 멀티턴 대화 가능
+- "그거", "더 자세히", "방금 거" 등 맥락 참조 질문 지원
+- 인메모리 구현으로 외부 의존성 없음
+
+### 제한사항
+- 봇 재시작 시 세션 초기화 (영속성 없음)
+- 확장 시 Redis 전환 고려
+
+### 문서화
+- `docs/MEMORY_SYSTEM.md`: 메모리 시스템 설계 및 저장소 비교
+- `docs/SESSION_MEMORY_PLAN.md`: 구현 계획서
+
+---
+
 ## 향후 개선 계획
 
 - [x] **복합 의도 처리 시스템 도입** (9번에서 해결)
@@ -1485,11 +1612,11 @@ Provider별 사용량
 - [x] **get_message 의도 추가** (13번에서 해결)
 - [x] **답글 기반 메시지 저장** (15번에서 해결)
 - [x] **Tool Registry 도입** (17번에서 해결)
-- [ ] 대화 히스토리 기반 멀티턴 대화
+- [x] **대화 히스토리 기반 멀티턴 대화** (20번에서 해결)
 - [ ] PDF/이미지 파일 분석
 - [ ] 예약 알림 기능
 - [ ] 금융 데이터 연동 (주가, 환율)
 - [ ] 채널 구독 및 콘텐츠 수집 기능
-- [ ] 사용자 기억 (Memory/RAG) 시스템
+- [ ] 사용자 기억 (Memory/RAG) 시스템 - Long-term, Episodic
 - [x] **AI Debate 기능** (19번에서 해결) - 다각도 토론을 통한 심층 분석
 - [ ] 외부 서비스 연동 (Notion 등)

@@ -6,6 +6,7 @@
 
 - **메시지 저장**: 포워딩된 메시지 자동 저장, 직접 작성한 메시지 저장
 - **컨텍스트 기반 Q&A**: 저장된 메시지를 참조하여 AI가 답변
+- **대화 맥락 유지**: 세션 메모리로 "그거 뭐야?", "더 자세히" 같은 후속 질문 지원
 - **실시간 웹 검색**: 최신 뉴스, 정보 검색
 - **X(트위터) 검색**: 트렌드, 실시간 반응 검색
 
@@ -304,6 +305,7 @@ telegram-agent/
 │   ├── planner.py       # Task Planner (복합 작업 분해)
 │   ├── executor.py      # Task Executor (순차 실행)
 │   ├── database.py      # SQLite 데이터베이스
+│   ├── memory.py        # Session Memory (대화 맥락 유지)
 │   └── tools/
 │       ├── __init__.py
 │       ├── xai_tools.py # xAI 검색 도구
@@ -312,6 +314,7 @@ telegram-agent/
     ├── PROJECT_SPEC.md  # 프로젝트 기획서
     ├── IMPLEMENTATION.md # 구현 계획
     ├── CHANGELOG.md      # 개선 내역
+    ├── MEMORY_SYSTEM.md  # 메모리 시스템 설계
     └── ARCHITECTURE_IMPROVEMENT.md # 아키텍처 개선 계획
 ```
 
@@ -329,9 +332,10 @@ telegram-agent/
 ## 향후 로드맵
 
 - [x] Phase 1: 복합 의도 처리 (Task Planner)
-- [ ] Phase 2: 문서 분석 (PDF, 이미지 OCR)
-- [ ] Phase 3: 금융 데이터 연동 (주가, 환율)
-- [ ] Phase 4: 자동화 (알림, 스케줄링)
+- [x] Phase 2: Session Memory (대화 맥락 유지)
+- [ ] Phase 3: 문서 분석 (PDF, 이미지 OCR)
+- [ ] Phase 4: 금융 데이터 연동 (주가, 환율)
+- [ ] Phase 5: 자동화 (알림, 스케줄링)
 
 ## 라이선스
 
